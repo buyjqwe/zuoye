@@ -274,7 +274,7 @@ def render_course_management_view(course, teacher_email):
 具体要求是: {details}。
 
 **重要规则**:
-1.  请生成 3 到 5 道独立的题目。
+1.  请生成难度适中的独立的题目。
 2.  每道题都必须是一个单独的 JSON 对象，并包含在 "questions" 列表中。
 3.  不要将多道题合并到一道题的 "question" 字段中。
 
