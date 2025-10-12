@@ -26,8 +26,8 @@ if 'selected_course_id' not in st.session_state: st.session_state.selected_cours
 MS_GRAPH_CONFIG = st.secrets["microsoft_graph"]
 try:
     genai.configure(api_key=st.secrets["gemini_api"]["api_key"])
-    # --- FIX: 使用兼容性最好的稳定模型别名 ---
-    MODEL = genai.GenerativeModel('gemini-pro')
+    # --- FIX: 使用您API密钥明确支持的模型名称 ---
+    MODEL = genai.GenerativeModel('gemini-2.5-flash')
     SAFETY_SETTINGS = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -36,7 +36,6 @@ try:
     ]
 except Exception as e:
     st.error(f"Gemini API密钥配置失败，请检查secrets.toml文件: {e}")
-
 
 # --- 核心功能函数定义 ---
 def get_email_hash(email): 
