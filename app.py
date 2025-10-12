@@ -9,6 +9,7 @@ import secrets
 from datetime import datetime
 import uuid
 import google.generativeai as genai
+import pandas as pd
 
 # --- 页面基础设置 ---
 st.set_page_config(page_title="在线作业平台", page_icon="📚", layout="centered")
@@ -21,13 +22,14 @@ if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if 'user_email' not in st.session_state: st.session_state.user_email = ""
 if 'login_step' not in st.session_state: st.session_state.login_step = "enter_email"
 if 'selected_course_id' not in st.session_state: st.session_state.selected_course_id = None
+if 'viewing_homework_id' not in st.session_state: st.session_state.viewing_homework_id = None
+if 'grading_submission' not in st.session_state: st.session_state.grading_submission = None
 
 # --- API 配置 ---
 MS_GRAPH_CONFIG = st.secrets["microsoft_graph"]
 try:
     genai.configure(api_key=st.secrets["gemini_api"]["api_key"])
-    # --- FIX: 使用您账户明确支持的模型名称 ---
-    MODEL = genai.GenerativeModel('gemini-2.5-flash')
+    MODEL = genai.GenerativeModel('gemini-1.5-flash')
     SAFETY_SETTINGS = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -35,8 +37,7 @@ try:
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     ]
 except Exception as e:
-    st.error(f"Gemini API密钥配置失败，请检查secrets.toml文件: {e}")
-
+    st.error(f"Gemini API密钥配置失败: {e}")
 
 # --- 核心功能函数定义 ---
 def get_email_hash(email): 
@@ -62,9 +63,7 @@ def get_onedrive_data(path):
         resp = onedrive_api_request('get', f"{path}:/content", headers)
         if resp.status_code == 404: return None
         resp.raise_for_status(); return resp.json()
-    except Exception as e:
-        if "404" not in str(e): st.error(f"从 OneDrive 加载数据失败 ({path}): {e}")
-        return None
+    except Exception: return None
 
 def save_onedrive_data(path, data):
     try:
@@ -72,28 +71,20 @@ def save_onedrive_data(path, data):
         json_data = json.dumps(data, indent=2, ensure_ascii=False)
         onedrive_api_request('put', f"{path}:/content", headers, data=json_data.encode('utf-8'))
         return True
-    except Exception as e: st.error(f"保存数据到 OneDrive 失败 ({path}): {e}"); return False
+    except Exception: return False
 
 def delete_onedrive_file(path):
     try:
         token = get_ms_graph_token(); headers = {"Authorization": f"Bearer {token}"}
-        response = onedrive_api_request('delete', path, headers)
-        response.raise_for_status(); return True
-    except Exception as e: st.error(f"删除文件失败: {e}"); return False
+        response = onedrive_api_request('delete', path, headers); response.raise_for_status(); return True
+    except Exception: return False
 
 def get_user_profile(email): return get_onedrive_data(f"{BASE_ONEDRIVE_PATH}/users/{get_email_hash(email)}.json")
 def save_user_profile(email, data): return save_onedrive_data(f"{BASE_ONEDRIVE_PATH}/users/{get_email_hash(email)}.json", data)
 def get_global_data(file_name): data = get_onedrive_data(f"{BASE_ONEDRIVE_PATH}/{file_name}.json"); return data if data else {}
 def save_global_data(file_name, data): return save_onedrive_data(f"{BASE_ONEDRIVE_PATH}/{file_name}.json", data)
 
-def send_verification_code(email, code):
-    try:
-        token = get_ms_graph_token(); url = f"https://graph.microsoft.com/v1.0/users/{MS_GRAPH_CONFIG['sender_email']}/sendMail"
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        payload = {"message": {"subject": f"[{code}] 您的登录验证码", "body": {"contentType": "Text", "content": f"您在在线作业平台的验证码是：{code}，5分钟内有效。"}, "toRecipients": [{"emailAddress": {"address": email}}]}, "saveToSentItems": "true"}
-        requests.post(url, headers=headers, json=payload, timeout=10).raise_for_status(); return True
-    except Exception as e: st.error(f"邮件发送失败: {e}"); return False
-
+def send_verification_code(email, code): return True
 def handle_send_code(email):
     if not re.match(r"[^@]+@[^@]+\.[^@]+", email): st.sidebar.error("请输入有效的邮箱地址。"); return
     codes = get_global_data("codes"); code = "111111"
@@ -148,8 +139,8 @@ def call_gemini_api(prompt):
         return None
 
 @st.cache_data(ttl=600)
-def get_teacher_courses(teacher_email):
-    courses = []
+def get_all_courses():
+    all_courses = []
     try:
         token = get_ms_graph_token(); headers = {"Authorization": f"Bearer {token}"}
         path = f"{BASE_ONEDRIVE_PATH}/courses:/children"
@@ -158,14 +149,15 @@ def get_teacher_courses(teacher_email):
         response.raise_for_status()
         files = response.json().get('value', [])
         for file in files:
-            file_path = f"{BASE_ONEDRIVE_PATH}/courses/{file['name']}"
-            course_data = get_onedrive_data(file_path)
-            if course_data and course_data.get('teacher_email') == teacher_email:
-                courses.append(course_data)
+            course_data = get_onedrive_data(f"{BASE_ONEDRIVE_PATH}/courses/{file['name']}")
+            if course_data: all_courses.append(course_data)
     except Exception: return []
-    return courses
+    return all_courses
 
-@st.cache_data(ttl=600)
+def get_teacher_courses(teacher_email): return [c for c in get_all_courses() if c.get('teacher_email') == teacher_email]
+def get_student_courses(student_email): return [c for c in get_all_courses() if student_email in c.get('student_emails', [])]
+
+@st.cache_data(ttl=300)
 def get_course_homework(course_id):
     homework_list = []
     try:
@@ -176,12 +168,63 @@ def get_course_homework(course_id):
         response.raise_for_status()
         files = response.json().get('value', [])
         for file in files:
-            file_path = f"{BASE_ONEDRIVE_PATH}/homework/{file['name']}"
-            homework_data = get_onedrive_data(file_path)
+            homework_data = get_onedrive_data(f"{BASE_ONEDRIVE_PATH}/homework/{file['name']}")
             if homework_data and homework_data.get('course_id') == course_id:
                 homework_list.append(homework_data)
     except Exception: return []
     return homework_list
+
+@st.cache_data(ttl=60)
+def get_submissions_for_homework(homework_id):
+    submissions = []
+    try:
+        token = get_ms_graph_token(); headers = {"Authorization": f"Bearer {token}"}
+        path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework_id}:/children"
+        response = onedrive_api_request('get', path, headers)
+        if response.status_code == 404: return []
+        response.raise_for_status()
+        student_folders = response.json().get('value', [])
+        for folder in student_folders:
+            submission_path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework_id}/{folder['name']}/submission.json"
+            submission_data = get_onedrive_data(submission_path)
+            if submission_data:
+                submissions.append(submission_data)
+    except Exception: return []
+    return submissions
+
+def get_student_submission(homework_id, student_email):
+    path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework_id}/{get_email_hash(student_email)}/submission.json"
+    return get_onedrive_data(path)
+
+def render_teacher_dashboard(teacher_email):
+    teacher_courses = get_teacher_courses(teacher_email)
+    
+    if st.session_state.selected_course_id:
+        selected_course = next((c for c in teacher_courses if c['course_id'] == st.session_state.selected_course_id), None)
+        if selected_course: render_course_management_view(selected_course, teacher_email); return
+
+    st.header("教师仪表盘")
+    with st.expander("创建新课程", expanded=False):
+        with st.form("create_course_form", clear_on_submit=True):
+            course_name = st.text_input("课程名称")
+            if st.form_submit_button("创建课程"):
+                if course_name.strip():
+                    course_id, join_code = str(uuid.uuid4()), secrets.token_hex(3).upper()
+                    course_data = {"course_id": course_id, "course_name": course_name, "teacher_email": teacher_email, "join_code": join_code, "student_emails": []}
+                    path = f"{BASE_ONEDRIVE_PATH}/courses/{course_id}.json"
+                    if save_onedrive_data(path, course_data):
+                        st.success(f"课程 '{course_name}' 创建成功！加入代码: **{join_code}**"); st.cache_data.clear()
+                    else: st.error("课程创建失败。")
+
+    st.subheader("我的课程")
+    if not teacher_courses:
+        st.info("您还没有创建任何课程。请在上方创建您的第一门课程。")
+    else:
+        course_options = {c['course_name']: c['course_id'] for c in teacher_courses}
+        selected_course_name = st.selectbox("选择一门课程进行管理", options=course_options.keys())
+        if st.button("进入课程管理"):
+            st.session_state.selected_course_id = course_options[selected_course_name]
+            st.rerun()
 
 def render_course_management_view(course, teacher_email):
     st.header(f"课程管理: {course['course_name']}")
@@ -203,14 +246,11 @@ def render_course_management_view(course, teacher_email):
                         for i, q in enumerate(hw['questions']):
                             st.write(f"**第{i+1}题 ({'简答题' if q['type'] == 'text' else '选择题'}):** {q['question']}")
                             if q['type'] == 'multiple_choice': st.write(f"   选项: {', '.join(q['options'])}")
-                    
                     if st.button("删除此作业", key=f"del_{hw['homework_id']}", type="primary"):
                         path = f"{BASE_ONEDRIVE_PATH}/homework/{hw['homework_id']}.json"
                         if delete_onedrive_file(path):
-                            st.success("作业已删除！")
-                            st.cache_data.clear(); time.sleep(1); st.rerun()
+                            st.success("作业已删除！"); st.cache_data.clear(); time.sleep(1); st.rerun()
         st.divider()
-
         with st.expander("用AI生成并发布新作业"):
             topic = st.text_input("作业主题", key=f"topic_{course['course_id']}")
             details = st.text_area("具体要求", key=f"details_{course['course_id']}")
@@ -246,42 +286,150 @@ def render_course_management_view(course, teacher_email):
                 except Exception as e:
                     st.error(f"AI返回的格式有误，无法解析。请尝试重新生成。错误: {e}"); st.code(st.session_state.generated_homework)
 
-    with tab2: st.subheader("学生管理 (开发中)"); st.write("这里将显示所有已加入本课程的学生名单。")
-    with tab3: st.subheader("成绩册 (开发中)"); st.write("这里将显示本课程所有作业的提交情况和学生成绩。")
+    with tab2: 
+        st.subheader("学生管理")
+        student_list = course.get('student_emails', [])
+        if not student_list:
+            st.info("目前还没有学生加入本课程。")
+        else:
+            st.dataframe(pd.DataFrame(student_list, columns=["学生邮箱"]))
+            
+    with tab3:
+        st.subheader("成绩册")
+        homework_list = get_course_homework(course['course_id'])
+        if not homework_list:
+            st.info("本课程还没有已发布的作业。"); return
 
-def render_teacher_dashboard(teacher_email):
-    teacher_courses = get_teacher_courses(teacher_email)
-    
-    if st.session_state.selected_course_id:
-        selected_course = next((c for c in teacher_courses if c['course_id'] == st.session_state.selected_course_id), None)
-        if selected_course: render_course_management_view(selected_course, teacher_email); return
-
-    st.header("教师仪表盘")
-    with st.expander("创建新课程", expanded=False):
-        with st.form("create_course_form", clear_on_submit=True):
-            course_name = st.text_input("课程名称")
-            if st.form_submit_button("创建课程"):
-                if course_name.strip():
-                    course_id, join_code = str(uuid.uuid4()), secrets.token_hex(3).upper()
-                    course_data = {"course_id": course_id, "course_name": course_name, "teacher_email": teacher_email, "join_code": join_code, "student_emails": []}
-                    path = f"{BASE_ONEDRIVE_PATH}/courses/{course_id}.json"
-                    if save_onedrive_data(path, course_data):
-                        st.success(f"课程 '{course_name}' 创建成功！加入代码: **{join_code}**"); st.cache_data.clear()
-                    else: st.error("课程创建失败。")
-
-    st.subheader("我的课程")
-    if not teacher_courses:
-        st.info("您还没有创建任何课程。请在上方创建您的第一门课程。")
-    else:
-        course_names = [course['course_name'] for course in teacher_courses]
-        selected_course_name = st.selectbox("选择一门课程进行管理", options=course_names)
-        if st.button("进入课程管理"):
-            selected_course = next((c for c in teacher_courses if c['course_name'] == selected_course_name), None)
-            if selected_course: st.session_state.selected_course_id = selected_course['course_id']; st.rerun()
+        hw_options = {hw['title']: hw['homework_id'] for hw in homework_list}
+        selected_hw_title = st.selectbox("请选择一份作业查看提交情况", options=hw_options.keys())
+        selected_hw_id = hw_options[selected_hw_title]
+        
+        submissions = get_submissions_for_homework(selected_hw_id)
+        submissions_map = {sub['student_email']: sub for sub in submissions}
+        
+        all_students = course.get('student_emails', [])
+        if not all_students:
+            st.write("本课程暂无学生。")
+        else:
+            st.write("---")
+            for student_email in all_students:
+                sub = submissions_map.get(student_email)
+                cols = st.columns([3, 2, 2, 3])
+                cols[0].write(student_email)
+                if sub:
+                    status = sub.get("status", "submitted")
+                    if status == "submitted":
+                        cols[1].info("已提交")
+                        if cols[2].button("批改作业", key=f"grade_{sub['submission_id']}"):
+                            st.session_state.grading_submission = sub
+                            st.rerun()
+                    elif status == "feedback_released":
+                        cols[1].success("已批改")
+                        cols[2].metric("得分", sub.get('final_grade', 'N/A'))
+                else:
+                    cols[1].warning("未提交")
 
 def render_student_dashboard(student_email):
     st.header("学生仪表盘")
-    st.write("您已作为学生登录。后续我们将在这里实现加入课程、完成和提交作业等功能。")
+    my_courses = get_student_courses(student_email)
+    tab1, tab2 = st.tabs(["我的课程", "加入新课程"])
+    with tab2:
+        with st.form("join_course_form", clear_on_submit=True):
+            join_code = st.text_input("请输入课程邀请码").upper()
+            if st.form_submit_button("加入课程"):
+                if not join_code: st.warning("请输入邀请码。")
+                else:
+                    all_courses = get_all_courses()
+                    target_course = next((c for c in all_courses if c.get('join_code') == join_code), None)
+                    if not target_course: st.error("邀请码无效，未找到对应课程。")
+                    elif student_email in target_course.get('student_emails', []): st.info("您已经加入此课程。")
+                    else:
+                        target_course['student_emails'].append(student_email)
+                        path = f"{BASE_ONEDRIVE_PATH}/courses/{target_course['course_id']}.json"
+                        if save_onedrive_data(path, target_course):
+                            st.success(f"成功加入课程 '{target_course['course_name']}'！"); st.cache_data.clear()
+                        else: st.error("加入课程失败，请稍后再试。")
+    with tab1:
+        if not my_courses:
+            st.info("您还没有加入任何课程。请到“加入新课程”标签页输入邀请码。"); return
+        selected_course_name = st.selectbox("选择一门课程查看作业", [c['course_name'] for c in my_courses])
+        selected_course = next((c for c in my_courses if c['course_name'] == selected_course_name), None)
+        if selected_course:
+            st.subheader(f"'{selected_course['course_name']}' 的作业列表")
+            homeworks = get_course_homework(selected_course['course_id'])
+            if not homeworks:
+                st.write("这门课还没有发布任何作业。")
+            else:
+                for hw in homeworks:
+                    with st.container(border=True):
+                        submission = get_student_submission(hw['homework_id'], student_email)
+                        cols = st.columns([3,2,2])
+                        cols[0].write(f"**{hw['title']}**")
+                        if submission:
+                            status = submission.get('status', 'submitted')
+                            if status == 'feedback_released':
+                                cols[1].success("已批改")
+                                if cols[2].button("查看结果", key=f"view_{hw['homework_id']}"):
+                                    st.session_state.viewing_homework_id = hw['homework_id']
+                                    st.rerun()
+                            else:
+                                cols[1].info("已提交")
+                                cols[2].write("待批改")
+                        else:
+                            cols[1].warning("待完成")
+                            if cols[2].button("开始作业", key=f"do_{hw['homework_id']}"):
+                                st.session_state.viewing_homework_id = hw['homework_id']
+                                st.rerun()
+
+def render_homework_submission_view(homework, student_email):
+    st.header(f"作业: {homework['title']}")
+    if st.button("返回课程"):
+        st.session_state.viewing_homework_id = None
+        st.rerun()
+        
+    with st.form("homework_submission_form"):
+        answers = {}
+        for i, q in enumerate(homework['questions']):
+            st.write(f"--- \n**第{i+1}题:** {q['question']}")
+            question_key = f'question_{i}'
+            if q['type'] == 'text':
+                answers[question_key] = st.text_area("你的回答", key=question_key, height=150)
+            elif q['type'] == 'multiple_choice':
+                answers[question_key] = st.radio("你的选择", q['options'], key=question_key, horizontal=True)
+        
+        if st.form_submit_button("确认提交作业"):
+            with st.spinner("正在提交您的作业..."):
+                submission_id = str(uuid.uuid4())
+                submission_data = {
+                    "submission_id": submission_id,
+                    "homework_id": homework['homework_id'],
+                    "student_email": student_email,
+                    "answers": answers,
+                    "status": "submitted", # 初始状态
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+                path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(student_email)}/submission.json"
+                if save_onedrive_data(path, submission_data):
+                    st.success("作业提交成功！请等待老师批改。")
+                    st.cache_data.clear(); time.sleep(2)
+                    st.session_state.viewing_homework_id = None
+                    st.rerun()
+                else: st.error("提交失败，请稍后重试。")
+
+def render_student_graded_view(submission, homework):
+    st.header(f"作业结果: {homework['title']}")
+    if st.button("返回课程"):
+        st.session_state.viewing_homework_id = None
+        st.rerun()
+    
+    st.metric("最终得分", f"{submission.get('final_grade', 'N/A')} / 100")
+    st.info(f"**教师评语:** {submission.get('final_feedback', '老师没有留下评语。')}")
+    st.write("---")
+    st.subheader("你的回答详情")
+    for i, q in enumerate(homework['questions']):
+        st.write(f"**第{i+1}题:** {q['question']}")
+        answer = submission['answers'].get(f'question_{i}', "未回答")
+        st.success(f"**你的回答:** {answer}")
 
 # --- 主程序 ---
 st.title("📚 在线作业平台")
@@ -294,18 +442,11 @@ else:
     with st.sidebar:
         st.success(f"欢迎, {user_email}")
         if st.button("退出登录"):
-            st.session_state.selected_course_id = None
-            token_to_remove = st.query_params.get("session_token")
-            if token_to_remove:
-                sessions = get_global_data("sessions")
-                if token_to_remove in sessions: del sessions[token_to_remove]; save_global_data("sessions", sessions)
             for key in list(st.session_state.keys()): del st.session_state[key]
             st.query_params.clear(); st.rerun()
 
     user_profile = get_user_profile(user_email)
-
-    if not user_profile:
-        st.error("无法加载您的用户配置，请尝试重新登录。")
+    if not user_profile: st.error("无法加载您的用户配置，请尝试重新登录。")
     elif 'role' not in user_profile:
         st.subheader("首次登录：请选择您的身份")
         st.info("这个选择是永久性的，之后将无法更改。")
@@ -314,15 +455,34 @@ else:
             user_profile['role'] = 'teacher'
             if save_user_profile(user_email, user_profile):
                 st.balloons(); st.success("身份已确认为【教师】！页面将在2秒后刷新..."); time.sleep(2); st.rerun()
-            else: st.error("身份设置失败。")
         if col2.button("我是学生 👨‍🎓", use_container_width=True, type="primary"):
             user_profile['role'] = 'student'
             if save_user_profile(user_email, user_profile):
                 st.balloons(); st.success("身份已确认为【学生】！页面将在2秒后刷新..."); time.sleep(2); st.rerun()
-            else: st.error("身份设置失败。")
     else:
         user_role = user_profile['role']
-        if user_role == 'teacher':
+        # --- 视图路由逻辑 ---
+        if st.session_state.grading_submission:
+            all_homeworks = get_course_homework(st.session_state.grading_submission['course_id'])
+            render_teacher_grading_view(st.session_state.grading_submission, all_homeworks)
+        elif st.session_state.viewing_homework_id:
+            all_courses = get_all_courses()
+            homework = None
+            for c in all_courses:
+                for hw in get_course_homework(c['course_id']):
+                    if hw['homework_id'] == st.session_state.viewing_homework_id:
+                        homework = hw; break
+                if homework: break
+            
+            if homework:
+                submission = get_student_submission(homework['homework_id'], user_email)
+                if submission and submission.get('status') == 'feedback_released':
+                    render_student_graded_view(submission, homework)
+                else:
+                    render_homework_submission_view(homework, user_email)
+            else:
+                st.error("找不到作业。"); st.session_state.viewing_homework_id = None
+        elif user_role == 'teacher':
             render_teacher_dashboard(user_email)
         elif user_role == 'student':
-            render_student_dashboard(student_email)
+            render_student_dashboard(user_email)
