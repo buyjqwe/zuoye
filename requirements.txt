@@ -1,9 +1,12 @@
 # requirements.txt
-streamlit
 google-generativeai
+plotly
+Pillow
+pandas
 streamlit
+tabulate
+supabase
 requests
 yfinance
-plotly
-tabulate
-supabase  # <--- 确保添加了这一行
+
+
