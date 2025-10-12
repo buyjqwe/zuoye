@@ -12,6 +12,7 @@ import google.generativeai as genai
 import pandas as pd
 from PIL import Image
 import io
+from streamlit_drawable_canvas import st_canvas
 
 # --- 页面基础设置 ---
 st.set_page_config(page_title="在线作业平台", page_icon="📚", layout="centered")
@@ -275,27 +276,75 @@ def render_course_management_view(course, teacher_email):
                         prompt = f"""你是一位教学经验丰富的老师。请为课程 '{course['course_name']}' 生成一份关于 '{topic}' 的作业。具体要求是: {details}。请严格按照以下JSON格式输出，不要有任何额外的解释文字：
                         {{ "title": "{topic} - 单元作业", "questions": [ {{"id":"q0", "type": "text", "question": "..."}}, {{"id":"q1", "type": "multiple_choice", "question": "...", "options": ["A", "B", "C"]}} ] }}"""
                         response_text = call_gemini_api(prompt)
-                        if response_text: st.session_state.generated_homework = response_text; st.success("作业已生成！")
+                        if response_text: 
+                            st.session_state.generated_homework = response_text
+                            st.success("作业已生成！请在下方编辑和发布。")
                 else: st.warning("请输入作业主题和具体要求。")
 
-            if 'generated_homework' in st.session_state:
-                st.subheader("作业预览与发布")
+            # 将AI生成的作业加载到可编辑状态
+            if 'generated_homework' in st.session_state and 'editable_homework' not in st.session_state:
                 try:
                     json_str_raw = st.session_state.generated_homework.strip().replace("```json", "").replace("```", "")
-                    homework_data = json.loads(json_str_raw)
-                    with st.container(border=True):
-                        st.write(f"**标题:** {homework_data['title']}")
-                        for i, q in enumerate(homework_data['questions']):
-                            st.write(f"**第{i+1}题 ({q.get('type', 'text')}):** {q['question']}")
-                    if st.button("确认发布", key=f"pub_hw_{course['course_id']}"):
+                    st.session_state.editable_homework = json.loads(json_str_raw)
+                except Exception as e:
+                    st.error(f"AI返回格式有误，无法编辑: {e}")
+                    st.code(st.session_state.generated_homework)
+                finally:
+                    del st.session_state.generated_homework
+
+            # 显示可编辑的作业表单
+            if 'editable_homework' in st.session_state:
+                cols_header = st.columns([3, 1])
+                with cols_header[0]:
+                    st.subheader("作业预览与发布 (可编辑)")
+                with cols_header[1]:
+                    if st.button("❌ 取消编辑"):
+                        del st.session_state.editable_homework
+                        st.rerun()
+
+                with st.form("edit_homework_form"):
+                    editable_data = st.session_state.editable_homework
+                    edited_title = st.text_input("作业标题", value=editable_data.get('title', ''))
+                    
+                    temp_questions = []
+                    for i, q in enumerate(editable_data.get('questions', [])):
+                        st.markdown(f"--- \n#### 第{i+1}题")
+                        question_text = st.text_area("题目内容", value=q.get('question', ''), key=f"q_text_{i}", height=100)
+                        
+                        question_type = q.get('type', 'text')
+                        options = q.get('options', [])
+                        
+                        current_q = {
+                            'id': q.get('id', f'q_{i}'),
+                            'type': question_type,
+                            'question': question_text
+                        }
+
+                        if question_type == 'multiple_choice':
+                            options_str = st.text_input("选项 (用英文逗号,分隔)", value=", ".join(options), key=f"q_opts_{i}")
+                            current_q['options'] = [opt.strip() for opt in options_str.split(',') if opt.strip()]
+
+                        temp_questions.append(current_q)
+
+                    submitted = st.form_submit_button("✅ 确认发布作业")
+                    if submitted:
                         homework_id = str(uuid.uuid4())
-                        homework_to_save = {"homework_id": homework_id, "course_id": course['course_id'], "title": homework_data['title'], "questions": homework_data['questions']}
+                        homework_to_save = {
+                            "homework_id": homework_id,
+                            "course_id": course['course_id'],
+                            "title": edited_title,
+                            "questions": temp_questions
+                        }
                         path = f"{BASE_ONEDRIVE_PATH}/homework/{homework_id}.json"
                         if save_onedrive_data(path, homework_to_save):
-                            st.success(f"作业已成功发布！"); del st.session_state.generated_homework; st.cache_data.clear(); time.sleep(1); st.rerun()
-                        else: st.error("作业发布失败。")
-                except Exception as e:
-                    st.error(f"AI返回格式有误: {e}"); st.code(st.session_state.generated_homework)
+                            st.success(f"作业已成功发布！")
+                            del st.session_state.editable_homework
+                            st.cache_data.clear()
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("作业发布失败。")
+
 
     with tab2:
         st.subheader("学生管理")
@@ -546,36 +595,110 @@ def render_homework_submission_view(homework, student_email):
         st.session_state.viewing_homework_id = None; st.rerun()
 
     with st.form("homework_submission_form"):
-        answers = {}; uploaded_files = {}
+        # Use a dictionary to store the widgets' return values upon submission
+        submission_inputs = {}
+
         for i, q in enumerate(homework['questions']):
             st.write(f"--- \n**第{i+1}题:** {q['question']}")
             question_key = q.get('id', f'q_{i}')
 
             if q.get('type') == 'text':
-                answers[question_key] = st.text_area("输入文字回答", key=question_key, height=150)
-                img_file_buffer = st.camera_input("拍照或上传手写答案", key=f"cam_{question_key}", help="如果上传图片，它将作为本题答案。")
-                if img_file_buffer is not None:
-                    img = Image.open(img_file_buffer); buf = io.BytesIO(); img.save(buf, format="JPEG"); img_bytes = buf.getvalue()
-                    file_name = f"answer_{question_key}.jpg"
-                    answers[question_key] = file_name
-                    uploaded_files[file_name] = img_bytes
+                # Use radio buttons to select the input method
+                input_method = st.radio(
+                    "选择答题方式",
+                    ("键盘输入", "手写板", "拍照上传"),
+                    key=f"method_{question_key}",
+                    horizontal=True
+                )
+
+                # Store the chosen method to use it during processing
+                submission_inputs[question_key] = {'method': input_method}
+
+                if input_method == "键盘输入":
+                    text_answer = st.text_area("输入文字回答", key=f"text_{question_key}", height=150)
+                    submission_inputs[question_key]['data'] = text_answer
+                
+                elif input_method == "手写板":
+                    st.info("请在下方白板区域手写答案。")
+                    canvas_result = st_canvas(
+                        stroke_width=3,
+                        stroke_color="#000000",
+                        background_color="#FFFFFF",
+                        height=300,
+                        width=600,
+                        drawing_mode="freedraw",
+                        key=f"canvas_{question_key}",
+                    )
+                    submission_inputs[question_key]['data'] = canvas_result
+
+                elif input_method == "拍照上传":
+                    img_file_buffer = st.camera_input("用摄像头拍照或从本地上传图片", key=f"cam_{question_key}")
+                    submission_inputs[question_key]['data'] = img_file_buffer
+
             elif q['type'] == 'multiple_choice':
-                answers[question_key] = st.radio("你的选择", q['options'], key=question_key, horizontal=True)
+                mc_answer = st.radio("你的选择", q['options'], key=question_key, horizontal=True)
+                submission_inputs[question_key] = {'method': 'multiple_choice', 'data': mc_answer}
 
         if st.form_submit_button("确认提交作业"):
-            with st.spinner("正在提交您的作业..."):
+            with st.spinner("正在处理并提交您的作业..."):
+                final_answers = {}
+                uploaded_files = {}
+
+                for q_key, s_input in submission_inputs.items():
+                    method = s_input['method']
+                    data = s_input['data']
+
+                    if method == "手写板" and data is not None and data.image_data is not None:
+                        img_array = data.image_data
+                        img = Image.fromarray(img_array.astype('uint8'), 'RGBA')
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG") # Save as PNG for better quality of drawings
+                        img_bytes = buf.getvalue()
+                        
+                        file_name = f"answer_{q_key}_canvas.png"
+                        final_answers[q_key] = file_name
+                        uploaded_files[file_name] = img_bytes
+                    
+                    elif method == "拍照上传" and data is not None:
+                        img = Image.open(data)
+                        buf = io.BytesIO()
+                        # Convert to JPEG to save space
+                        if img.mode == 'RGBA':
+                            img = img.convert('RGB')
+                        img.save(buf, format="JPEG")
+                        img_bytes = buf.getvalue()
+                        
+                        file_name = f"answer_{q_key}_cam.jpg"
+                        final_answers[q_key] = file_name
+                        uploaded_files[file_name] = img_bytes
+                    
+                    elif method in ["键盘输入", "multiple_choice"]:
+                        final_answers[q_key] = data
+
+                # Proceed with the existing submission logic
                 submission_path_prefix = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(student_email)}"
                 for filename, filebytes in uploaded_files.items():
                     path = f"{submission_path_prefix}/{filename}"
                     save_onedrive_data(path, filebytes, is_json=False)
 
                 submission_id = str(uuid.uuid4())
-                submission_data = {"submission_id": submission_id, "homework_id": homework['homework_id'], "student_email": student_email, "answers": answers, "status": "submitted", "timestamp": datetime.utcnow().isoformat() + "Z"}
+                submission_data = {
+                    "submission_id": submission_id,
+                    "homework_id": homework['homework_id'],
+                    "student_email": student_email,
+                    "answers": final_answers,
+                    "status": "submitted",
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
                 path = f"{submission_path_prefix}/submission.json"
                 if save_onedrive_data(path, submission_data, is_json=True):
-                    st.success("作业提交成功！"); st.cache_data.clear(); time.sleep(2)
-                    st.session_state.viewing_homework_id = None; st.rerun()
-                else: st.error("提交失败，请稍后重试。")
+                    st.success("作业提交成功！")
+                    st.cache_data.clear()
+                    time.sleep(2)
+                    st.session_state.viewing_homework_id = None
+                    st.rerun()
+                else:
+                    st.error("提交失败，请稍后重试。")
 
 def render_student_graded_view(submission, homework):
     st.header(f"作业结果: {homework['title']}")
