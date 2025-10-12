@@ -510,15 +510,25 @@ def render_course_management_view(course, teacher_email):
                         # --- START: 生成补习作业逻辑 ---
                         with st.spinner(f"正在为 {len(graded_subs_for_remedial)} 名学生生成个性化补习作业..."):
                             all_hw = get_all_homework()
+                            num_questions = len(hw.get('questions', []))
+                            if num_questions == 0:
+                                st.error("作业没有题目，无法生成补习作业。")
+                                continue
+
+                            max_score_per_question = 100 / num_questions
+
                             for sub in graded_subs_for_remedial:
                                 student_email = sub['student_email']
                                 st.toast(f"正在为 {student_email} 生成...")
                                 try:
+                                    # 优化：动态计算并识别学生的薄弱点（即未得满分的题目）
                                     analysis_context = [
                                         f"- 题目: {hw['questions'][f['question_index']]['question']}\n- 学生错误回答: {sub['answers'].get(hw['questions'][f['question_index']]['id'], {}).get('text', 'N/A')}\n- 批改反馈: {f['feedback']}"
-                                        for f in sub.get('ai_detailed_grades', []) if f['grade'] < 20 # 假设满分20分
+                                        for f in sub.get('ai_detailed_grades', []) if f.get('grade', max_score_per_question) < max_score_per_question
                                     ]
-                                    if not analysis_context: continue
+                                    if not analysis_context:
+                                        st.toast(f"ℹ️ {student_email} 没有明显的薄弱点，跳过。")
+                                        continue
                                     
                                     prompt = f"""# 角色
 你是一位顶级的个性化辅导老师。
@@ -535,7 +545,8 @@ def render_course_management_view(course, teacher_email):
   "questions": [ {{"id": "q0", "type": "text", "question": "..."}}, {{"id": "q1", "type": "text", "question": "..."}} ]
 }}"""
                                     response_text = call_gemini_api(prompt)
-                                    if response_text:
+                                    # 核心修复：增加健壮性检查，防止因AI未返回内容或格式错误而中断
+                                    if response_text and response_text.strip():
                                         remedial_hw_data = json.loads(re.sub(r'```json\s*|\s*```', '', response_text.strip()))
                                         new_homework = {
                                             "homework_id": str(uuid.uuid4()), "course_id": hw['course_id'],
@@ -544,6 +555,8 @@ def render_course_management_view(course, teacher_email):
                                             "is_remedial": True, "student_email": student_email
                                         }
                                         all_hw.append(new_homework)
+                                    else:
+                                        st.toast(f"⚠️ AI未能为 {student_email} 生成有效的补习作业内容。")
                                 except Exception as e:
                                     st.toast(f"❌ 为 {student_email} 生成作业时出错: {e}")
                             
@@ -994,3 +1007,4 @@ else:
             render_teacher_dashboard(user_email)
         elif user_role == 'student':
             render_student_dashboard(user_email, user_profile)
+
