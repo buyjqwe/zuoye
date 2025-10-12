@@ -26,8 +26,7 @@ if 'selected_course_id' not in st.session_state: st.session_state.selected_cours
 MS_GRAPH_CONFIG = st.secrets["microsoft_graph"]
 try:
     genai.configure(api_key=st.secrets["gemini_api"]["api_key"])
-    # --- FIX: 使用您API密钥明确支持的模型名称 ---
-    MODEL = genai.GenerativeModel('gemini-2.5-flash')
+    MODEL = genai.GenerativeModel('gemini-pro')
     SAFETY_SETTINGS = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -52,6 +51,7 @@ def onedrive_api_request(method, path, headers, data=None, params=None):
     url = f"{base_url}/{path}"
     if method.lower() == 'get': return requests.get(url, headers=headers, params=params, timeout=15)
     if method.lower() == 'put': return requests.put(url, headers=headers, data=data, timeout=15)
+    if method.lower() == 'delete': return requests.delete(url, headers=headers, timeout=15)
     return None
 
 def get_onedrive_data(path):
@@ -71,6 +71,17 @@ def save_onedrive_data(path, data):
         onedrive_api_request('put', f"{path}:/content", headers, data=json_data.encode('utf-8'))
         return True
     except Exception as e: st.error(f"保存数据到 OneDrive 失败 ({path}): {e}"); return False
+
+def delete_onedrive_file(path):
+    try:
+        token = get_ms_graph_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        response = onedrive_api_request('delete', path, headers)
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        st.error(f"删除文件失败: {e}")
+        return False
 
 def get_user_profile(email): return get_onedrive_data(f"{BASE_ONEDRIVE_PATH}/users/{get_email_hash(email)}.json")
 def save_user_profile(email, data): return save_onedrive_data(f"{BASE_ONEDRIVE_PATH}/users/{get_email_hash(email)}.json", data)
@@ -156,6 +167,24 @@ def get_teacher_courses(teacher_email):
     except Exception: return []
     return courses
 
+@st.cache_data(ttl=600)
+def get_course_homework(course_id):
+    homework_list = []
+    try:
+        token = get_ms_graph_token(); headers = {"Authorization": f"Bearer {token}"}
+        path = f"{BASE_ONEDRIVE_PATH}/homework:/children"
+        response = onedrive_api_request('get', path, headers)
+        if response.status_code == 404: return []
+        response.raise_for_status()
+        files = response.json().get('value', [])
+        for file in files:
+            file_path = f"{BASE_ONEDRIVE_PATH}/homework/{file['name']}"
+            homework_data = get_onedrive_data(file_path)
+            if homework_data and homework_data.get('course_id') == course_id:
+                homework_list.append(homework_data)
+    except Exception: return []
+    return homework_list
+
 def render_course_management_view(course, teacher_email):
     st.header(f"课程管理: {course['course_name']}")
     st.info(f"学生加入代码: **{course['join_code']}**")
@@ -164,40 +193,60 @@ def render_course_management_view(course, teacher_email):
 
     tab1, tab2, tab3 = st.tabs(["作业管理", "学生管理", "成绩册"])
     with tab1:
-        st.subheader("用AI生成并发布作业")
-        topic = st.text_input("作业主题", key=f"topic_{course['course_id']}")
-        details = st.text_area("具体要求", key=f"details_{course['course_id']}")
-        if st.button("AI 生成作业题目", key=f"gen_hw_{course['course_id']}"):
-            if topic and details:
-                with st.spinner("AI正在为您生成题目..."):
-                    prompt = f"""你是一位教学经验丰富的老师。请为课程 '{course['course_name']}' 生成一份关于 '{topic}' 的作业。具体要求是: {details}。请严格按照以下JSON格式输出，不要有任何额外的解释文字：
-                    {{ "title": "{topic} - 单元作业", "questions": [ {{"type": "text", "question": "请在这里生成第一个问题"}}, {{"type": "multiple_choice", "question": "请在这里生成第二个问题", "options": ["选项A", "选项B", "选项C", "选项D"]}} ] }}"""
-                    response_text = call_gemini_api(prompt)
-                    if response_text:
-                        st.session_state.generated_homework = response_text
-                        st.success("作业已生成！请在下方预览和发布。")
-            else: st.warning("请输入作业主题和具体要求。")
-
-        if 'generated_homework' in st.session_state:
-            st.subheader("作业预览与发布")
-            try:
-                json_str = st.session_state.generated_homework.strip().replace("```json", "").replace("```", "")
-                homework_data = json.loads(json_str)
+        st.subheader("已发布的作业")
+        course_homeworks = get_course_homework(course['course_id'])
+        if not course_homeworks:
+            st.info("本课程暂无已发布的作业。")
+        else:
+            for hw in course_homeworks:
                 with st.container(border=True):
-                    st.write(f"**标题:** {homework_data['title']}")
-                    for i, q in enumerate(homework_data['questions']):
-                        st.write(f"**第{i+1}题 ({'简答题' if q['type'] == 'text' else '选择题'}):** {q['question']}")
-                        if q['type'] == 'multiple_choice': st.write(f"   选项: {', '.join(q['options'])}")
-                
-                if st.button("确认发布", key=f"pub_hw_{course['course_id']}"):
-                    homework_id = str(uuid.uuid4())
-                    homework_to_save = {"homework_id": homework_id, "course_id": course['course_id'], "title": homework_data['title'], "questions": homework_data['questions']}
-                    path = f"{BASE_ONEDRIVE_PATH}/homework/{homework_id}.json"
-                    if save_onedrive_data(path, homework_to_save):
-                        st.success(f"作业已成功发布到本课程！"); del st.session_state.generated_homework; st.rerun()
-                    else: st.error("作业发布失败，请稍后重试。")
-            except Exception as e:
-                st.error(f"AI返回的格式有误，无法解析。请尝试重新生成。错误: {e}"); st.code(st.session_state.generated_homework)
+                    st.write(f"**{hw['title']}**")
+                    with st.expander("查看题目"):
+                        for i, q in enumerate(hw['questions']):
+                            st.write(f"**第{i+1}题 ({'简答题' if q['type'] == 'text' else '选择题'}):** {q['question']}")
+                            if q['type'] == 'multiple_choice': st.write(f"   选项: {', '.join(q['options'])}")
+                    
+                    if st.button("删除此作业", key=f"del_{hw['homework_id']}", type="primary"):
+                        path = f"{BASE_ONEDRIVE_PATH}/homework/{hw['homework_id']}.json"
+                        if delete_onedrive_file(path):
+                            st.success("作业已删除！")
+                            st.cache_data.clear(); time.sleep(1); st.rerun()
+        st.divider()
+
+        with st.expander("用AI生成并发布新作业"):
+            topic = st.text_input("作业主题", key=f"topic_{course['course_id']}")
+            details = st.text_area("具体要求", key=f"details_{course['course_id']}")
+            if st.button("AI 生成作业题目", key=f"gen_hw_{course['course_id']}"):
+                if topic and details:
+                    with st.spinner("AI正在为您生成题目..."):
+                        prompt = f"""你是一位教学经验丰富的老师。请为课程 '{course['course_name']}' 生成一份关于 '{topic}' 的作业。具体要求是: {details}。请严格按照以下JSON格式输出，不要有任何额外的解释文字：
+                        {{ "title": "{topic} - 单元作业", "questions": [ {{"type": "text", "question": "请在这里生成第一个问题"}}, {{"type": "multiple_choice", "question": "请在这里生成第二个问题", "options": ["选项A", "选项B", "选项C", "选项D"]}} ] }}"""
+                        response_text = call_gemini_api(prompt)
+                        if response_text:
+                            st.session_state.generated_homework = response_text
+                            st.success("作业已生成！请在下方预览和发布。")
+                else: st.warning("请输入作业主题和具体要求。")
+
+            if 'generated_homework' in st.session_state:
+                st.subheader("作业预览与发布")
+                try:
+                    json_str = st.session_state.generated_homework.strip().replace("```json", "").replace("```", "")
+                    homework_data = json.loads(json_str)
+                    with st.container(border=True):
+                        st.write(f"**标题:** {homework_data['title']}")
+                        for i, q in enumerate(homework_data['questions']):
+                            st.write(f"**第{i+1}题 ({'简答题' if q['type'] == 'text' else '选择题'}):** {q['question']}")
+                            if q['type'] == 'multiple_choice': st.write(f"   选项: {', '.join(q['options'])}")
+                    
+                    if st.button("确认发布", key=f"pub_hw_{course['course_id']}"):
+                        homework_id = str(uuid.uuid4())
+                        homework_to_save = {"homework_id": homework_id, "course_id": course['course_id'], "title": homework_data['title'], "questions": homework_data['questions']}
+                        path = f"{BASE_ONEDRIVE_PATH}/homework/{homework_id}.json"
+                        if save_onedrive_data(path, homework_to_save):
+                            st.success(f"作业已成功发布到本课程！"); del st.session_state.generated_homework; st.cache_data.clear(); time.sleep(1); st.rerun()
+                        else: st.error("作业发布失败，请稍后重试。")
+                except Exception as e:
+                    st.error(f"AI返回的格式有误，无法解析。请尝试重新生成。错误: {e}"); st.code(st.session_state.generated_homework)
 
     with tab2: st.subheader("学生管理 (开发中)"); st.write("这里将显示所有已加入本课程的学生名单。")
     with tab3: st.subheader("成绩册 (开发中)"); st.write("这里将显示本课程所有作业的提交情况和学生成绩。")
