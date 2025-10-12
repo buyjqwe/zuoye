@@ -262,7 +262,6 @@ def render_course_management_view(course, teacher_email):
                             st.success("作业已删除！"); st.cache_data.clear(); time.sleep(1); st.rerun()
         st.divider()
 
-        # --- MODIFIED: Removed expander for a direct UI ---
         st.subheader("用AI生成并发布新作业")
         topic = st.text_input("作业主题", key=f"topic_{course['course_id']}")
         details = st.text_area("具体要求", key=f"details_{course['course_id']}")
@@ -270,15 +269,22 @@ def render_course_management_view(course, teacher_email):
             if topic and details:
                 with st.spinner("AI正在为您生成题目..."):
                     # --- MODIFIED: Enhanced prompt for better structure ---
-                    prompt = f"""你是一位教学经验丰富的老师。请为课程 '{course['course_name']}' 生成一份关于 '{topic}' 的作业。
-具体要求是: {details}。
+                    prompt = f"""# 角色
+你是一位教学经验丰富的老师。
 
-**重要规则**:
-1.  请生成难度适中的独立的题目。
-2.  每道题都必须是一个单独的 JSON 对象，并包含在 "questions" 列表中。
-3.  不要将多道题合并到一道题的 "question" 字段中。
+# 任务
+为课程“{course['course_name']}”创建一份关于“{topic}”的作业。
+作业要求如下：{details}
 
-请严格按照以下JSON格式输出，不要有任何额外的解释文字：
+# 输出格式要求
+你必须严格遵循以下JSON格式。整个输出必须是一个可以被直接解析的JSON对象，不包含任何解释性文字或Markdown标记。
+
+**核心规则：**
+- 作业必须包含 3 到 5 个**独立的问题**。
+- 每一个问题都必须是`questions`列表中的一个**独立JSON对象**。
+- **绝对不能**将多个题目的文本合并到单个`"question"`字段中。
+
+**JSON格式模板：**
 {{
   "title": "{topic} - 单元作业",
   "questions": [
@@ -308,13 +314,16 @@ def render_course_management_view(course, teacher_email):
 
         if 'generated_homework' in st.session_state and 'editable_homework' not in st.session_state:
             try:
-                json_str_raw = st.session_state.generated_homework.strip().replace("```json", "").replace("```", "")
+                # Clean the response string before parsing
+                json_str_raw = re.sub(r'```json\s*|\s*```', '', st.session_state.generated_homework.strip())
                 st.session_state.editable_homework = json.loads(json_str_raw)
             except Exception as e:
                 st.error(f"AI返回格式有误，无法编辑: {e}")
                 st.code(st.session_state.generated_homework)
             finally:
-                del st.session_state.generated_homework
+                # Ensure generated_homework is cleared even if parsing fails
+                if 'generated_homework' in st.session_state:
+                    del st.session_state.generated_homework
 
         if 'editable_homework' in st.session_state:
             cols_header = st.columns([3, 1])
