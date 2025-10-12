@@ -445,10 +445,10 @@ def render_course_management_view(course, teacher_email):
 
                 action_cols = st.columns(2)
                 with action_cols[0]:
-                    if st.button(f"🤖 一键AI批量批改 ({len(pending_subs)}份)", key=f"batch_grade_{hw['homework_id']}", disabled=not pending_subs, use_container_width=True):
-                        # --- START: 批量批改逻辑 ---
-                        with st.spinner(f"正在批量批改 {len(pending_subs)} 份作业，请稍候..."):
-                            progress_bar = st.progress(0, text="开始批改...")
+                    if st.button(f"🤖 一键AI批改并反馈 ({len(pending_subs)}份)", key=f"batch_grade_and_review_{hw['homework_id']}", disabled=not pending_subs, use_container_width=True):
+                        # --- START: 合并后的批量批改与反馈逻辑 ---
+                        with st.spinner(f"正在一键处理 {len(pending_subs)} 份作业，请稍候..."):
+                            progress_bar = st.progress(0, text="开始处理...")
                             total_subs = len(pending_subs)
                             instruction_prompt = """# 角色
 你是一位经验丰富、耐心且善于引导的教学助手。
@@ -470,7 +470,7 @@ def render_course_management_view(course, teacher_email):
   ]
 }"""
                             for i, sub in enumerate(pending_subs):
-                                progress_text = f"正在批改第 {i+1}/{total_subs} 份: {sub['student_email']}"
+                                progress_text = f"正在处理第 {i+1}/{total_subs} 份: {sub['student_email']}"
                                 progress_bar.progress((i + 1) / total_subs, text=progress_text)
                                 try:
                                     all_answers = sub.get('answers', {})
@@ -490,20 +490,27 @@ def render_course_management_view(course, teacher_email):
                                     if ai_result_text:
                                         json_str = ai_result_text.strip().replace("```json", "").replace("```", "")
                                         ai_result = json.loads(json_str)
-                                        sub['status'] = "ai_graded"
+                                        
+                                        # 记录AI的批改详情
                                         sub['ai_grade'] = ai_result.get('overall_grade')
                                         sub['ai_feedback'] = ai_result.get('overall_feedback')
                                         sub['ai_detailed_grades'] = ai_result.get('detailed_grades')
+
+                                        # 直接采纳为最终结果并反馈
+                                        sub['status'] = "feedback_released"
+                                        sub['final_grade'] = sub.get('ai_grade')
+                                        sub['final_feedback'] = sub.get('ai_feedback', 'AI 自动评语。')
+
                                         path = f"{BASE_ONEDRIVE_PATH}/submissions/{sub['homework_id']}/{get_email_hash(sub['student_email'])}/submission.json"
                                         save_onedrive_data(path, sub)
                                 except Exception as e:
-                                    st.toast(f"❌ 批改 {sub['student_email']} 时出错: {e}")
+                                    st.toast(f"❌ 处理 {sub['student_email']} 时出错: {e}")
                             
-                            st.success("所有待批改作业已处理完毕！")
+                            st.success("所有作业已处理完毕并反馈给学生！")
                             st.cache_data.clear()
                             time.sleep(1)
                             st.rerun()
-                        # --- END: 批量批改逻辑 ---
+                        # --- END: 合并后的逻辑 ---
                 
                 with action_cols[1]:
                     if st.button(f"📚 一键生成补习作业 ({len(graded_subs_for_remedial)}份)", key=f"batch_remedial_{hw['homework_id']}", disabled=not graded_subs_for_remedial, use_container_width=True):
@@ -1029,5 +1036,7 @@ else:
             render_teacher_dashboard(user_email)
         elif user_role == 'student':
             render_student_dashboard(user_email, user_profile)
+
+
 
 
