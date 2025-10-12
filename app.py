@@ -510,6 +510,10 @@ def render_course_management_view(course, teacher_email):
                         # --- START: 生成补习作业逻辑 ---
                         with st.spinner(f"正在为 {len(graded_subs_for_remedial)} 名学生生成个性化补习作业..."):
                             all_hw = get_all_homework()
+                            newly_generated_hw = []
+                            success_students = []
+                            failure_students = []
+
                             num_questions = len(hw.get('questions', []))
                             if num_questions == 0:
                                 st.error("作业没有题目，无法生成补习作业。")
@@ -521,7 +525,6 @@ def render_course_management_view(course, teacher_email):
                                 student_email = sub['student_email']
                                 st.toast(f"正在为 {student_email} 生成...")
                                 try:
-                                    # 优化：动态计算并识别学生的薄弱点（即未得满分的题目）
                                     analysis_context = [
                                         f"- 题目: {hw['questions'][f['question_index']]['question']}\n- 学生错误回答: {sub['answers'].get(hw['questions'][f['question_index']]['id'], {}).get('text', 'N/A')}\n- 批改反馈: {f['feedback']}"
                                         for f in sub.get('ai_detailed_grades', []) if f.get('grade', max_score_per_question) < max_score_per_question
@@ -545,7 +548,6 @@ def render_course_management_view(course, teacher_email):
   "questions": [ {{"id": "q0", "type": "text", "question": "..."}}, {{"id": "q1", "type": "text", "question": "..."}} ]
 }}"""
                                     response_text = call_gemini_api(prompt)
-                                    # 核心修复：增加健壮性检查，防止因AI未返回内容或格式错误而中断
                                     if response_text and response_text.strip():
                                         remedial_hw_data = json.loads(re.sub(r'```json\s*|\s*```', '', response_text.strip()))
                                         new_homework = {
@@ -554,15 +556,35 @@ def render_course_management_view(course, teacher_email):
                                             "questions": remedial_hw_data['questions'],
                                             "is_remedial": True, "student_email": student_email
                                         }
-                                        all_hw.append(new_homework)
+                                        newly_generated_hw.append(new_homework)
+                                        success_students.append(student_email)
                                     else:
-                                        st.toast(f"⚠️ AI未能为 {student_email} 生成有效的补习作业内容。")
+                                        failure_students.append((student_email, "AI未返回有效内容"))
                                 except Exception as e:
-                                    st.toast(f"❌ 为 {student_email} 生成作业时出错: {e}")
+                                    failure_students.append((student_email, str(e)))
                             
-                            if save_all_homework(all_hw):
-                                st.success("所有补习作业已生成并发布！")
-                                st.cache_data.clear(); time.sleep(1); st.rerun()
+                            if newly_generated_hw:
+                                all_hw.extend(newly_generated_hw)
+                                if not save_all_homework(all_hw):
+                                    st.error("保存新生成的补习作业失败！")
+                                    failure_students.extend([(s, "保存失败") for s in success_students])
+                                    success_students = []
+                            
+                            # --- 显示最终的总结报告 ---
+                            st.markdown("---")
+                            st.subheader("补习作业生成结果")
+                            if success_students:
+                                st.success(f"✅ 成功为 {len(success_students)} 名学生生成了作业。")
+                            if failure_students:
+                                st.warning(f"⚠️ 未能为 {len(failure_students)} 名学生生成作业。详情如下：")
+                                for email, reason in failure_students:
+                                    st.error(f"- **{email}**: {reason}")
+                            st.markdown("---")
+                            
+                            if st.button("刷新页面", key="refresh_after_remedial"):
+                                st.cache_data.clear()
+                                st.rerun()
+
                         # --- END: 生成补习作业逻辑 ---
                 
                 # --- START: 导出成绩CSV逻辑 ---
@@ -1007,4 +1029,5 @@ else:
             render_teacher_dashboard(user_email)
         elif user_role == 'student':
             render_student_dashboard(user_email, user_profile)
+
 
