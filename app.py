@@ -20,7 +20,7 @@ st.set_page_config(page_title="在线作业平台", page_icon="📚", layout="ce
 # --- 全局常量 ---
 BASE_ONEDRIVE_PATH = "root:/Apps/HomeworkPlatform"
 COURSES_FILE_PATH = f"{BASE_ONEDRIVE_PATH}/all_courses.json"
-HOMEWORK_FILE_PATH = f"{BASE_ONEDRIVE_PATH}/all_homework.json" # New constant for single homework file
+HOMEWORK_FILE_PATH = f"{BASE_ONEDRIVE_PATH}/all_homework.json" 
 
 # --- 初始化 Session State ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
@@ -267,24 +267,26 @@ def render_course_management_view(course, teacher_email):
         if st.button("AI 生成作业题目", key=f"gen_hw_{course['course_id']}"):
             if topic and details:
                 with st.spinner("AI正在为您生成题目..."):
+                    # --- MODIFIED: New prompt with delimiter strategy ---
                     prompt = f"""# 角色
 你是一位教学经验丰富的老师。
 # 任务
-为课程“{course['course_name']}”创建一份关于“{topic}”的作业。
-作业要求如下：{details}
+为课程“{course['course_name']}”创建一份关于“{topic}”的作业。作业要求如下：{details}
 # 输出格式要求
-你必须严格遵循以下JSON格式。整个输出必须是一个可以被直接解析的JSON对象，不包含任何解释性文字或Markdown标记。
+你必须严格遵循以下JSON格式，不包含任何解释性文字或Markdown标记。
 **核心规则：**
-- 作业必须包含 3 到 5 个**独立的问题**。
-- 每一个问题都必须是`questions`列表中的一个**独立JSON对象**。
-- **绝对不能**将多个题目的文本合并到单个`"question"`字段中。
+1. 生成 3 到 5 个独立的问题。
+2. **将所有问题文本合并到 *单个* "question" 字段中**。
+3. **在每个独立问题的文本末尾，必须使用特殊分隔符 `_||_` 来分隔**。最后一个问题末尾不需要分隔符。
 **JSON格式模板：**
 {{
   "title": "{topic} - 单元作业",
   "questions": [
-    {{"id": "q0", "type": "text", "question": "这里是第一道独立的题目内容..."}},
-    {{"id": "q1", "type": "multiple_choice", "question": "这里是第二道独立的题目内容...", "options": ["选项A", "选项B", "选项C"]}},
-    {{"id": "q2", "type": "text", "question": "这里是第三道独立的题目内容..."}}
+    {{
+      "id": "q0",
+      "type": "text",
+      "question": "这里是第一道题的内容。_||_这里是第二道题的内容。_||_这里是第三道题的内容。"
+    }}
   ]
 }}"""
                     response_text = call_gemini_api(prompt)
@@ -296,7 +298,29 @@ def render_course_management_view(course, teacher_email):
         if 'generated_homework' in st.session_state and 'editable_homework' not in st.session_state:
             try:
                 json_str_raw = re.sub(r'```json\s*|\s*```', '', st.session_state.generated_homework.strip())
-                st.session_state.editable_homework = json.loads(json_str_raw)
+                json_data = json.loads(json_str_raw)
+
+                # --- NEW: Post-processing logic to split combined questions ---
+                processed_questions = []
+                if json_data.get("questions"):
+                    for q_obj in json_data["questions"]:
+                        if "_||_" in q_obj.get("question", ""):
+                            # Split the question text by the delimiter
+                            split_questions_text = [q.strip() for q in q_obj["question"].split("_||_") if q.strip()]
+                            # Create a new, separate question object for each part
+                            for i, q_text in enumerate(split_questions_text):
+                                new_q = {
+                                    "id": f"{q_obj.get('id', 'q')}_{i}",
+                                    "type": "text", # Default to text, teacher can edit
+                                    "question": q_text,
+                                    "options": []
+                                }
+                                processed_questions.append(new_q)
+                        else:
+                            processed_questions.append(q_obj)
+                json_data["questions"] = processed_questions
+                st.session_state.editable_homework = json_data
+                
             except Exception as e:
                 st.error(f"AI返回格式有误，无法编辑: {e}")
                 st.code(st.session_state.generated_homework)
@@ -315,7 +339,6 @@ def render_course_management_view(course, teacher_email):
 
             with st.form("edit_homework_form"):
                 editable_data = st.session_state.editable_homework
-                # Widgets are just for display. We'll get the real values from session_state on submit.
                 st.text_input("作业标题", value=editable_data.get('title', ''), key=f"edited_title_{course['course_id']}")
                 
                 for i, q in enumerate(editable_data.get('questions', [])):
@@ -327,14 +350,12 @@ def render_course_management_view(course, teacher_email):
                 
                 submitted = st.form_submit_button("✅ 确认发布作业")
                 if submitted:
-                    # --- FIXED: Process form data *after* submission ---
                     edited_title = st.session_state[f"edited_title_{course['course_id']}"]
                     
                     course_hw_titles = [hw['title'] for hw in get_course_homework(course['course_id'])]
                     if edited_title in course_hw_titles:
                         st.error("本课程中已存在同名作业，请修改标题后发布。")
                     else:
-                        # Rebuild questions list from session_state here
                         final_questions = []
                         for i, q in enumerate(editable_data.get('questions', [])):
                             question_text = st.session_state[f"q_text_{i}"]
