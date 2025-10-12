@@ -19,6 +19,8 @@ BASE_ONEDRIVE_PATH = "root:/Apps/HomeworkPlatform"
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if 'user_email' not in st.session_state: st.session_state.user_email = ""
 if 'login_step' not in st.session_state: st.session_state.login_step = "enter_email"
+if 'selected_course_id' not in st.session_state: st.session_state.selected_course_id = None
+
 
 # --- API 配置 ---
 MS_GRAPH_CONFIG = st.secrets["microsoft_graph"]
@@ -105,24 +107,11 @@ def handle_send_code(email):
         return
     
     codes = get_global_data("codes")
-    
-    # --- !! 开发/测试专用 !! ---
-    # 1. 固定验证码为 111111
-    code = "111111" 
-    # 恢复时请删除/注释掉上面这行, 并取消下面这行的注释
-    # code = str(random.randint(100000, 999999))
-    # -------------------------
-
+    code = "111111" # 测试模式
     codes[email.lower()] = {"code": code, "expires_at": time.time() + 300}
     save_global_data("codes", codes)
-
-    # --- !! 开发/测试专用 !! ---
-    # 2. 跳过发送邮件的步骤
-    # 恢复时请删除下面这行, 并取消再下面一行的注释
-    st.sidebar.success("测试模式：请输入 111111")
-    # if not send_verification_code(email, code): return
-    # -------------------------
     
+    st.sidebar.success("测试模式：请输入 111111")
     st.session_state.login_step = "enter_code"
     st.session_state.temp_email = email
     st.rerun()
@@ -139,10 +128,7 @@ def handle_verify_code(email, code):
     if code_info["code"] == code:
         user_profile = get_user_profile(email)
         if not user_profile:
-            user_profile = {
-                "email": email,
-                "created_at": datetime.utcnow().isoformat() + "Z",
-            }
+            user_profile = {"email": email, "created_at": datetime.utcnow().isoformat() + "Z"}
             save_user_profile(email, user_profile)
             st.toast("🎉 注册成功！请选择您的身份。")
         
@@ -208,7 +194,6 @@ def call_gemini_api(prompt):
 
 @st.cache_data(ttl=600)
 def get_teacher_courses(teacher_email):
-    """获取指定教师创建的所有课程"""
     courses = []
     try:
         token = get_ms_graph_token()
@@ -228,99 +213,116 @@ def get_teacher_courses(teacher_email):
         return []
     return courses
 
-def render_teacher_dashboard(teacher_email):
-    st.header("教师仪表盘")
-    
-    with st.expander("创建新课程", expanded=False):
-        with st.form("create_course_form", clear_on_submit=True):
-            course_name = st.text_input("课程名称")
-            submitted = st.form_submit_button("创建课程")
-            if submitted and course_name.strip():
-                course_id = str(uuid.uuid4())
-                join_code = secrets.token_hex(3).upper()
-                
-                course_data = {
-                    "course_id": course_id,
-                    "course_name": course_name,
-                    "teacher_email": teacher_email,
-                    "join_code": join_code,
-                    "student_emails": []
-                }
-                
-                path = f"{BASE_ONEDRIVE_PATH}/courses/{course_id}.json"
-                if save_onedrive_data(path, course_data):
-                    st.success(f"课程 '{course_name}' 创建成功！")
-                    st.info(f"学生加入代码为: **{join_code}**")
-                    st.cache_data.clear()
-                else:
-                    st.error("课程创建失败，请稍后再试。")
+def render_course_management_view(course, teacher_email):
+    st.header(f"课程管理: {course['course_name']}")
+    st.info(f"学生加入代码: **{course['join_code']}**")
 
-    st.subheader("用AI生成并发布作业")
-    topic = st.text_input("作业主题 (例如: 文艺复兴时期的艺术)")
-    details = st.text_area("具体要求 (例如: 生成2道选择题和1道简答题，关于米开朗基罗的作品)")
+    if st.button("返回课程列表"):
+        st.session_state.selected_course_id = None
+        st.rerun()
 
-    if st.button("AI 生成作业题目"):
-        if topic and details:
-            with st.spinner("AI正在为您生成题目..."):
-                prompt = f"""
-                你是一位教学经验丰富的老师。请根据以下要求，为学生生成一份作业。
-                主题: {topic}
-                具体要求: {details}
-                请严格按照以下JSON格式输出，不要有任何额外的解释文字：
-                {{
-                    "title": "{topic} - 单元作业",
-                    "questions": [
-                        {{"type": "text", "question": "请在这里生成第一个问题"}},
-                        {{"type": "multiple_choice", "question": "请在这里生成第二个问题", "options": ["选项A", "选项B", "选项C", "选项D"]}}
-                    ]
-                }}
-                """
-                response_text = call_gemini_api(prompt)
-                if response_text:
-                    st.session_state.generated_homework = response_text
-                    st.success("作业已生成！请在下方预览和发布。")
-        else:
-            st.warning("请输入作业主题和具体要求。")
+    tab1, tab2, tab3 = st.tabs(["作业管理", "学生管理", "成绩册"])
 
-    if 'generated_homework' in st.session_state:
-        st.subheader("作业预览与发布")
-        try:
-            json_str = st.session_state.generated_homework.strip().replace("```json", "").replace("```", "")
-            homework_data = json.loads(json_str)
-            
-            with st.container(border=True):
-                st.write(f"**标题:** {homework_data['title']}")
-                for i, q in enumerate(homework_data['questions']):
-                    st.write(f"**第{i+1}题 ({'简答题' if q['type'] == 'text' else '选择题'}):** {q['question']}")
-                    if q['type'] == 'multiple_choice':
-                        st.write(f"   选项: {', '.join(q['options'])}")
-            
-            teacher_courses = get_teacher_courses(teacher_email)
-            if not teacher_courses:
-                st.warning("您还没有创建任何课程，请先创建课程再发布作业。")
+    with tab1:
+        st.subheader("用AI生成并发布作业")
+        topic = st.text_input("作业主题", key=f"topic_{course['course_id']}")
+        details = st.text_area("具体要求", key=f"details_{course['course_id']}")
+
+        if st.button("AI 生成作业题目", key=f"gen_hw_{course['course_id']}"):
+            if topic and details:
+                with st.spinner("AI正在为您生成题目..."):
+                    prompt = f"""你是一位教学经验丰富的老师。请为课程 '{course['course_name']}' 生成一份关于 '{topic}' 的作业。具体要求是: {details}。请严格按照以下JSON格式输出，不要有任何额外的解释文字：
+                    {{
+                        "title": "{topic} - 单元作业",
+                        "questions": [
+                            {{"type": "text", "question": "请在这里生成第一个问题"}},
+                            {{"type": "multiple_choice", "question": "请在这里生成第二个问题", "options": ["选项A", "选项B", "选项C", "选项D"]}}
+                        ]
+                    }}"""
+                    response_text = call_gemini_api(prompt)
+                    if response_text:
+                        st.session_state.generated_homework = response_text
+                        st.success("作业已生成！请在下方预览和发布。")
             else:
-                course_options = {course['course_name']: course['course_id'] for course in teacher_courses}
-                selected_course_name = st.selectbox("请选择要发布到的课程", options=course_options.keys())
+                st.warning("请输入作业主题和具体要求。")
+
+        if 'generated_homework' in st.session_state:
+            st.subheader("作业预览与发布")
+            try:
+                json_str = st.session_state.generated_homework.strip().replace("```json", "").replace("```", "")
+                homework_data = json.loads(json_str)
                 
-                if st.button("确认发布"):
+                with st.container(border=True):
+                    st.write(f"**标题:** {homework_data['title']}")
+                    for i, q in enumerate(homework_data['questions']):
+                        st.write(f"**第{i+1}题 ({'简答题' if q['type'] == 'text' else '选择题'}):** {q['question']}")
+                        if q['type'] == 'multiple_choice':
+                            st.write(f"   选项: {', '.join(q['options'])}")
+                
+                if st.button("确认发布", key=f"pub_hw_{course['course_id']}"):
                     homework_id = str(uuid.uuid4())
                     homework_to_save = {
                         "homework_id": homework_id,
-                        "course_id": course_options[selected_course_name],
+                        "course_id": course['course_id'],
                         "title": homework_data['title'],
                         "questions": homework_data['questions']
                     }
                     path = f"{BASE_ONEDRIVE_PATH}/homework/{homework_id}.json"
                     if save_onedrive_data(path, homework_to_save):
-                        st.success(f"作业已成功发布到课程 '{selected_course_name}'！")
+                        st.success(f"作业已成功发布到本课程！")
                         del st.session_state.generated_homework
                         st.rerun()
                     else:
                         st.error("作业发布失败，请稍后重试。")
+            except Exception as e:
+                st.error(f"AI返回的格式有误，无法解析。请尝试重新生成。错误: {e}")
+                st.code(st.session_state.generated_homework)
 
-        except Exception as e:
-            st.error(f"AI返回的格式有误，无法解析。请尝试重新生成。错误: {e}")
-            st.code(st.session_state.generated_homework)
+    with tab2:
+        st.subheader("学生管理 (开发中)")
+        st.write("这里将显示所有已加入本课程的学生名单。")
+
+    with tab3:
+        st.subheader("成绩册 (开发中)")
+        st.write("这里将显示本课程所有作业的提交情况和学生成绩。")
+
+def render_teacher_dashboard(teacher_email):
+    teacher_courses = get_teacher_courses(teacher_email)
+    
+    if st.session_state.selected_course_id:
+        selected_course = next((c for c in teacher_courses if c['course_id'] == st.session_state.selected_course_id), None)
+        if selected_course:
+            render_course_management_view(selected_course, teacher_email)
+            return
+
+    st.header("教师仪表盘")
+    with st.expander("创建新课程", expanded=False):
+        with st.form("create_course_form", clear_on_submit=True):
+            course_name = st.text_input("课程名称")
+            if st.form_submit_button("创建课程"):
+                if course_name.strip():
+                    course_id = str(uuid.uuid4())
+                    join_code = secrets.token_hex(3).upper()
+                    course_data = {"course_id": course_id, "course_name": course_name, "teacher_email": teacher_email, "join_code": join_code, "student_emails": []}
+                    path = f"{BASE_ONEDRIVE_PATH}/courses/{course_id}.json"
+                    if save_onedrive_data(path, course_data):
+                        st.success(f"课程 '{course_name}' 创建成功！加入代码: **{join_code}**")
+                        st.cache_data.clear()
+                    else:
+                        st.error("课程创建失败。")
+
+    st.subheader("我的课程")
+    if not teacher_courses:
+        st.info("您还没有创建任何课程。请在上方创建您的第一门课程。")
+    else:
+        course_names = [course['course_name'] for course in teacher_courses]
+        selected_course_name = st.selectbox("选择一门课程进行管理", options=course_names)
+        
+        if st.button("进入课程管理"):
+            selected_course = next((c for c in teacher_courses if c['course_name'] == selected_course_name), None)
+            if selected_course:
+                st.session_state.selected_course_id = selected_course['course_id']
+                st.rerun()
 
 def render_student_dashboard(student_email):
     st.header("学生仪表盘")
@@ -339,6 +341,7 @@ else:
     with st.sidebar:
         st.success(f"欢迎, {user_email}")
         if st.button("退出登录"):
+            st.session_state.selected_course_id = None # 退出时清除课程选择
             token_to_remove = st.query_params.get("session_token")
             if token_to_remove:
                 sessions = get_global_data("sessions")
@@ -360,15 +363,15 @@ else:
             user_profile['role'] = 'teacher'
             if save_user_profile(user_email, user_profile):
                 st.balloons(); st.success("身份已确认为【教师】！页面将在2秒后刷新..."); time.sleep(2); st.rerun()
-            else: st.error("身份设置失败，请稍后重试。")
+            else: st.error("身份设置失败。")
         if col2.button("我是学生 👨‍🎓", use_container_width=True, type="primary"):
             user_profile['role'] = 'student'
             if save_user_profile(user_email, user_profile):
                 st.balloons(); st.success("身份已确认为【学生】！页面将在2秒后刷新..."); time.sleep(2); st.rerun()
-            else: st.error("身份设置失败，请稍后重试。")
+            else: st.error("身份设置失败。")
     else:
         user_role = user_profile['role']
         if user_role == 'teacher':
             render_teacher_dashboard(user_email)
         elif user_role == 'student':
-            render_student_dashboard(student_email)
+            render_student_dashboard(user_email)
