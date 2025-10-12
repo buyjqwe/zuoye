@@ -32,8 +32,13 @@ if 'ai_grade_result' not in st.session_state: st.session_state.ai_grade_result =
 MS_GRAPH_CONFIG = st.secrets["microsoft_graph"]
 try:
     genai.configure(api_key=st.secrets["gemini_api"]["api_key"])
-    MODEL = genai.GenerativeModel('models/gemini-2.5-flash')
-    SAFETY_SETTINGS = [{"category": f"HARM_CATEGORY_{c}", "threshold": "BLOCK_NONE"} for c in ["HARASSMENT", "HATE_SPEECH", "SEXUALLY_EXPLICIT", "DANGEROUS_CONTENT"]]
+    MODEL = genai.GenerativeModel('models/gemini-1.5-flash')
+    SAFETY_SETTINGS = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
 except Exception as e:
     st.error(f"Gemini API密钥配置失败: {e}")
 
@@ -222,7 +227,7 @@ def render_teacher_dashboard(teacher_email):
                     course_id, join_code = str(uuid.uuid4()), secrets.token_hex(3).upper()
                     course_data = {"course_id": course_id, "course_name": course_name, "teacher_email": teacher_email, "join_code": join_code, "student_emails": []}
                     path = f"{BASE_ONEDRIVE_PATH}/courses/{course_id}.json"
-                    if save_onedrive_data(path, course_data, is_json=True):
+                    if save_onedrive_data(path, course_data):
                         st.success(f"课程 '{course_name}' 创建成功！加入代码: **{join_code}**"); st.cache_data.clear()
                     else: st.error("课程创建失败。")
     st.subheader("我的课程列表")
@@ -246,7 +251,8 @@ def render_course_management_view(course, teacher_email):
     with tab1:
         st.subheader("已发布的作业")
         course_homeworks = get_course_homework(course['course_id'])
-        if not course_homeworks: st.info("本课程暂无作业。")
+        if not course_homeworks:
+            st.info("本课程暂无作业。")
         else:
             for hw in course_homeworks:
                 with st.container(border=True):
@@ -274,8 +280,11 @@ def render_course_management_view(course, teacher_email):
             if 'generated_homework' in st.session_state:
                 st.subheader("作业预览与发布")
                 try:
-                    json_str = st.session_state.generated_homework.strip().replace("```json", "").replace("```", "")
-                    homework_data = json.loads(json_str)
+                    # --- FIX: Escape backslashes before parsing JSON ---
+                    json_str_raw = st.session_state.generated_homework.strip().replace("```json", "").replace("```", "")
+                    json_str_fixed = json_str_raw.replace('\\', '\\\\')
+                    homework_data = json.loads(json_str_fixed)
+
                     with st.container(border=True):
                         st.write(f"**标题:** {homework_data['title']}")
                         for i, q in enumerate(homework_data['questions']):
@@ -293,7 +302,8 @@ def render_course_management_view(course, teacher_email):
     with tab2: 
         st.subheader("学生管理")
         student_list = course.get('student_emails', [])
-        if not student_list: st.info("目前还没有学生加入本课程。")
+        if not student_list:
+            st.info("目前还没有学生加入本课程。")
         else:
             for student_email in student_list:
                 cols = st.columns([4, 1]); cols[0].write(f"- {student_email}")
@@ -302,7 +312,6 @@ def render_course_management_view(course, teacher_email):
                     path = f"{BASE_ONEDRIVE_PATH}/courses/{course['course_id']}.json"
                     if save_onedrive_data(path, course): st.success(f"已移除 {student_email}"); st.cache_data.clear(); time.sleep(1); st.rerun()
                     else: st.error("操作失败。")
-            
     with tab3:
         st.subheader("成绩册")
         homework_list = get_course_homework(course['course_id'])
