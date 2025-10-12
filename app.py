@@ -267,7 +267,6 @@ def render_course_management_view(course, teacher_email):
         if st.button("AI 生成作业题目", key=f"gen_hw_{course['course_id']}"):
             if topic and details:
                 with st.spinner("AI正在为您生成题目..."):
-                    # --- MODIFIED: New prompt with delimiter strategy ---
                     prompt = f"""# 角色
 你是一位教学经验丰富的老师。
 # 任务
@@ -300,18 +299,15 @@ def render_course_management_view(course, teacher_email):
                 json_str_raw = re.sub(r'```json\s*|\s*```', '', st.session_state.generated_homework.strip())
                 json_data = json.loads(json_str_raw)
 
-                # --- NEW: Post-processing logic to split combined questions ---
                 processed_questions = []
                 if json_data.get("questions"):
                     for q_obj in json_data["questions"]:
                         if "_||_" in q_obj.get("question", ""):
-                            # Split the question text by the delimiter
                             split_questions_text = [q.strip() for q in q_obj["question"].split("_||_") if q.strip()]
-                            # Create a new, separate question object for each part
                             for i, q_text in enumerate(split_questions_text):
                                 new_q = {
                                     "id": f"{q_obj.get('id', 'q')}_{i}",
-                                    "type": "text", # Default to text, teacher can edit
+                                    "type": "text",
                                     "question": q_text,
                                     "options": []
                                 }
@@ -572,41 +568,64 @@ def render_student_dashboard(student_email):
                             if cols[2].button("开始作业", key=f"do_{hw['homework_id']}"):
                                 st.session_state.viewing_homework_id = hw['homework_id']; st.rerun()
 
+# --- REVAMPED: render_homework_submission_view for per-question input ---
 def render_homework_submission_view(homework, student_email):
     st.header(f"作业: {homework['title']}")
     if st.button("返回课程列表"):
         st.session_state.viewing_homework_id = None
         st.rerun()
-
-    with st.expander("查看题目要求", expanded=True):
-        for i, q in enumerate(homework['questions']):
-             st.write(f"**第{i+1}题:** {q['question']}")
-             if q.get('type') == 'multiple_choice':
-                 st.write(f"选项: {', '.join(q.get('options', []))}")
-
-    st.divider()
     
-    with st.form("email_submission_form"):
-        st.subheader("撰写回答")
-        main_text_answer = st.text_area("正文", height=250, placeholder="在此输入您的主要文字回答...")
-        uploaded_files = st.file_uploader(
-            "添加附件 (图片、录音、视频)",
-            accept_multiple_files=True,
-            type=['png', 'jpg', 'jpeg', 'mp3', 'wav', 'm4a', 'mp4', 'mov']
-        )
-        
-        submitted = st.form_submit_button("确认提交作业")
+    with st.form("per_question_submission_form"):
+        # Loop through each question and create input fields for it
+        for i, q in enumerate(homework['questions']):
+            q_key = q.get('id', f'q_{i}')
+            st.divider()
+            st.subheader(f"第{i+1}题")
+            st.write(q['question'])
+
+            if q.get('type') == 'multiple_choice':
+                st.radio("你的选择", q['options'], key=f"mc_{q_key}", horizontal=True)
+            else: # Default is text/multimodal
+                st.text_area("文字回答", key=f"text_{q_key}", height=150)
+                st.file_uploader(
+                    "添加附件 (图片、录音、视频)",
+                    accept_multiple_files=True,
+                    type=['png', 'jpg', 'jpeg', 'mp3', 'wav', 'm4a', 'mp4', 'mov'],
+                    key=f"files_{q_key}"
+                )
+
+        submitted = st.form_submit_button("确认提交所有回答")
         if submitted:
             with st.spinner("正在处理并提交您的作业..."):
-                final_answers = {'main_text': main_text_answer, 'attachments': []}
-                processed_files = {}
+                final_answers = {}
+                processed_files = {} # {filename: bytes}
 
-                if uploaded_files:
-                    for uploaded_file in uploaded_files:
-                        safe_filename = f"{uuid.uuid4().hex}_{uploaded_file.name}"
-                        final_answers['attachments'].append(safe_filename)
-                        processed_files[safe_filename] = uploaded_file.getvalue()
-
+                # Loop again to gather data from session state
+                for i, q in enumerate(homework['questions']):
+                    q_key = q.get('id', f'q_{i}')
+                    
+                    if q.get('type') == 'multiple_choice':
+                        final_answers[q_key] = {
+                            "text": st.session_state[f"mc_{q_key}"],
+                            "attachments": []
+                        }
+                    else:
+                        text_answer = st.session_state[f"text_{q_key}"]
+                        uploaded_files = st.session_state[f"files_{q_key}"]
+                        attachment_filenames = []
+                        
+                        if uploaded_files:
+                            for uploaded_file in uploaded_files:
+                                safe_filename = f"{q_key}_{uuid.uuid4().hex}_{uploaded_file.name}"
+                                attachment_filenames.append(safe_filename)
+                                processed_files[safe_filename] = uploaded_file.getvalue()
+                        
+                        final_answers[q_key] = {
+                            "text": text_answer,
+                            "attachments": attachment_filenames
+                        }
+                
+                # --- Proceed with submission logic ---
                 submission_path_prefix = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(student_email)}"
                 for filename, filebytes in processed_files.items():
                     path = f"{submission_path_prefix}/{filename}"
@@ -645,31 +664,29 @@ def render_student_graded_view(submission, homework):
     st.info(f"**教师总评:** {submission.get('final_feedback', '老师没有留下评语。')}")
     st.divider()
 
-    st.subheader("我的提交")
-    answers = submission.get('answers', {})
-    st.info(f"**文字回答:**\n\n{answers.get('main_text', '无')}")
+    st.subheader("我的提交与AI反馈")
+    all_answers = submission.get('answers', {})
+    detailed_grades_map = {g['question_index']: g for g in submission.get('ai_detailed_grades', [])}
 
-    attachments = answers.get('attachments', [])
-    if attachments:
-        st.write("**附件:**")
-        for filename in attachments:
-            file_path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(submission['student_email'])}/{filename}"
-            render_attachment(file_path, filename)
-    
-    st.divider()
-    st.subheader("逐题分析与反馈")
-    detailed_grades = submission.get('ai_detailed_grades', [])
-    if detailed_grades:
-        for detail in detailed_grades:
-            q_index = detail.get('question_index', -1)
-            feedback = detail.get('feedback', '无反馈')
-            if q_index != -1 and q_index < len(homework['questions']):
-                question_text = homework['questions'][q_index]['question']
-                with st.container(border=True):
-                    st.write(f"**题目 {q_index + 1}:** {question_text}")
-                    st.warning(f"**AI反馈:** {feedback}")
-    else:
-        st.info("暂无逐题的AI反馈。")
+    for i, q in enumerate(homework['questions']):
+        q_key = q.get('id', f'q_{i}')
+        answer_data = all_answers.get(q_key)
+        
+        with st.container(border=True):
+            st.write(f"**题目 {i + 1}:** {q['question']}")
+            
+            if answer_data:
+                st.info(f"**我的回答:**\n\n{answer_data.get('text', '无文字回答')}")
+                if answer_data.get('attachments'):
+                    for filename in answer_data['attachments']:
+                        file_path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(submission['student_email'])}/{filename}"
+                        render_attachment(file_path, filename)
+            else:
+                st.info("未回答此题")
+            
+            ai_feedback = detailed_grades_map.get(i)
+            if ai_feedback:
+                st.warning(f"**AI反馈:** {ai_feedback.get('feedback', '无')}")
 
 def get_mime_type(filename):
     ext = filename.split('.')[-1].lower()
@@ -689,69 +706,70 @@ def render_teacher_grading_view(submission, homework):
     st.write(f"作业: {homework['title']}"); st.divider()
     
     st.subheader("学生提交的内容")
-    answers = submission.get('answers', {})
-    st.info(f"**文字回答:**\n\n{answers.get('main_text', '无')}")
+    all_answers = submission.get('answers', {})
     
-    attachments = answers.get('attachments', [])
-    if attachments:
-        st.write("**附件:**")
-        for filename in attachments:
-            file_path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(submission['student_email'])}/{filename}"
-            render_attachment(file_path, filename)
+    for i, q in enumerate(homework['questions']):
+        q_key = q.get('id', f'q_{i}')
+        answer_data = all_answers.get(q_key)
+        with st.container(border=True):
+            st.write(f"**题目 {i + 1}:** {q['question']}")
+            if answer_data:
+                st.info(f"**学生回答:**\n\n{answer_data.get('text', '无文字回答')}")
+                if answer_data.get('attachments'):
+                    for filename in answer_data['attachments']:
+                        file_path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(submission['student_email'])}/{filename}"
+                        render_attachment(file_path, filename)
+            else:
+                st.info("学生未回答此题")
+    
     st.divider()
 
     if submission.get('status') != 'feedback_released':
         if st.button("🤖 AI自动批改", key=f"ai_grade_{submission['submission_id']}"):
             with st.spinner("AI正在进行多模态分析与批改..."):
                 instruction_prompt = """# 角色
-你是一位经验丰富、耐心且善于引导的教学助手。你的专长是分析多媒体作业提交，包括文本、图片、音频和视频。
+你是一位经验丰富、耐心且善于引导的教学助手。
 # 任务
-请根据【作业题目】、【学生文字回答】和【附件内容】批改作业。
+根据【作业题目】和【学生结构化回答】批改作业。学生的回答是一个JSON对象，键是题目ID，值是包含`text`和`attachments`的对象。
 # 核心指令：多模态内容分析
-1.  **综合分析**: 将学生的文字回答和所有附件内容作为一个整体来理解和评分。
-2.  **图片附件**: 直接分析图片中的手写文字、图表或图像，并评价其正确性。
-3.  **音频/视频附件**:
-    * **转写与分析**: 如果附件是音频或视频，并且题目要求朗诵、背诵或口头回答，请先**转写**学生所说的内容。然后，将转写内容与题目要求（如原文）进行比对，指出其中的错误、遗漏或不流畅之处。
-    * **时间戳标记**: 在提供反馈时，如果可能，请使用 **[HH:MM:SS]** 格式的时间戳来指出具体问题发生在哪一秒。例如：“[00:00:15] ‘pronunciation’ 这个单词的发音不准确。”
-    * **内容理解**: 如果视频内容是过程演示（如解题、实验操作），请描述学生的步骤并评价其方法的正确性。
-4.  **给出分数和评语**: 基于以上综合分析，为每个问题提供反馈，并给出最终的总分和总体评语。
+1.  **逐题分析**: 针对每个题目ID，分析其对应的`text`和`attachments`。
+2.  **图片附件**: 直接分析图片内容。
+3.  **音频/视频附件**: 转写并分析语音，使用 **[HH:MM:SS]** 时间戳标记问题。
+4.  **给出分数和评语**: 基于以上分析，为每个问题提供反馈，并给出总分和总体评语。
 # 输出格式
-请严格以JSON格式输出，不要包含任何额外说明或markdown标记。
+请严格以JSON格式输出。`detailed_grades`中的`question_index`必须从0开始，与题目顺序对应。
 {
   "overall_grade": 85,
-  "overall_feedback": "同学，你做得很好！文字部分回答清晰，知识点掌握扎实。背诵录音整体流畅，但在[00:00:21]处有一个明显的发音错误，请注意。",
+  "overall_feedback": "同学，你做得很好！...",
   "detailed_grades": [
     {"question_index": 0, "grade": 20, "feedback": "第一题的图片解答步骤清晰，结果正确。"},
-    {"question_index": 1, "grade": 15, "feedback": "第二题的背诵很流利，但在[00:01:10]将‘persistent’读成了‘pro-sistent’，请多加练习。"}
+    {"question_index": 1, "grade": 15, "feedback": "第二题的背诵很流利，但在[00:01:10]处有错误..."}
   ]
 }"""
                 
                 text_data_part = f"""
 【作业题目】: {json.dumps(homework['questions'], ensure_ascii=False, indent=2)}
-【学生文字回答】: {answers.get('main_text', '')}
-【附件列表】: {json.dumps(attachments, ensure_ascii=False)}
+【学生结构化回答】: {json.dumps(all_answers, ensure_ascii=False, indent=2)}
 (附件的具体内容将在后面提供)
 ---
 请开始你的批改工作。"""
                 
                 api_prompt_parts = [instruction_prompt, text_data_part]
 
-                for filename in attachments:
-                    file_path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(submission['student_email'])}/{filename}"
-                    mime_type = get_mime_type(filename)
-                    if not mime_type: 
-                        st.toast(f"不支持的文件类型: {filename}，已跳过", icon="⚠️")
-                        continue
+                for q_key, answer_data in all_answers.items():
+                    if answer_data.get('attachments'):
+                        for filename in answer_data['attachments']:
+                            file_path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(submission['student_email'])}/{filename}"
+                            mime_type = get_mime_type(filename)
+                            if not mime_type: continue
 
-                    file_bytes = get_onedrive_data(file_path, is_json=False)
-                    if file_bytes:
-                        api_prompt_parts.append(f"--- 附件 '{filename}' 内容 ---")
-                        if mime_type.startswith('video/') or mime_type.startswith('audio/'):
-                            api_prompt_parts.append(genai.Part.from_data(mime_type=mime_type, data=file_bytes))
-                        elif mime_type.startswith('image/'):
-                             api_prompt_parts.append(Image.open(io.BytesIO(file_bytes)))
-                    else:
-                        api_prompt_parts.append(f"--- 附件 '{filename}' 无法加载 ---")
+                            file_bytes = get_onedrive_data(file_path, is_json=False)
+                            if file_bytes:
+                                api_prompt_parts.append(f"--- 附件 '{filename}' (属于题目 {q_key}) 内容 ---")
+                                if mime_type.startswith('video/') or mime_type.startswith('audio/'):
+                                    api_prompt_parts.append(genai.Part.from_data(mime_type=mime_type, data=file_bytes))
+                                elif mime_type.startswith('image/'):
+                                     api_prompt_parts.append(Image.open(io.BytesIO(file_bytes)))
 
 
                 ai_result_text = call_gemini_api(api_prompt_parts)
