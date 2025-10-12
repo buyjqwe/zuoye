@@ -312,6 +312,7 @@ def render_course_management_view(course, teacher_email):
                     path = f"{BASE_ONEDRIVE_PATH}/courses/{course['course_id']}.json"
                     if save_onedrive_data(path, course): st.success(f"已移除 {student_email}"); st.cache_data.clear(); time.sleep(1); st.rerun()
                     else: st.error("操作失败。")
+            
     with tab3:
         st.subheader("成绩册")
         homework_list = get_course_homework(course['course_id'])
