@@ -8,7 +8,7 @@ import hashlib
 import secrets
 from datetime import datetime
 import uuid
-import google.generativeai as genai # 使用官方SDK
+import google.generativeai as genai
 
 # --- 页面基础设置 ---
 st.set_page_config(page_title="在线作业平台", page_icon="📚", layout="centered")
@@ -24,10 +24,10 @@ if 'selected_course_id' not in st.session_state: st.session_state.selected_cours
 
 # --- API 配置 ---
 MS_GRAPH_CONFIG = st.secrets["microsoft_graph"]
-# --- Gemini SDK 配置 ---
 try:
     genai.configure(api_key=st.secrets["gemini_api"]["api_key"])
-    MODEL = genai.GenerativeModel('gemini-1.5-flash-latest')
+    # --- FIX: 使用兼容性最好的稳定模型别名 ---
+    MODEL = genai.GenerativeModel('gemini-pro')
     SAFETY_SETTINGS = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -35,11 +35,10 @@ try:
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     ]
 except Exception as e:
-    st.error(f"Gemini API密钥配置失败: {e}")
+    st.error(f"Gemini API密钥配置失败，请检查secrets.toml文件: {e}")
 
 
 # --- 核心功能函数定义 ---
-
 def get_email_hash(email): 
     return hashlib.sha256(email.lower().encode('utf-8')).hexdigest()
 
@@ -133,7 +132,6 @@ def display_login_form():
             if st.button("返回"): st.session_state.login_step = "enter_email"; st.rerun()
 
 def call_gemini_api(prompt):
-    """使用 Gemini SDK 调用 API"""
     try:
         response = MODEL.generate_content(prompt, safety_settings=SAFETY_SETTINGS)
         return response.text
