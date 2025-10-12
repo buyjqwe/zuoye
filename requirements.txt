@@ -1,0 +1,8 @@
+# requirements.txt
+
+streamlit
+requests
+yfinance
+plotly
+tabulate
+supabase  # <--- 确保添加了这一行
