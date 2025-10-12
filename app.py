@@ -315,29 +315,40 @@ def render_course_management_view(course, teacher_email):
 
             with st.form("edit_homework_form"):
                 editable_data = st.session_state.editable_homework
-                edited_title = st.text_input("作业标题", value=editable_data.get('title', ''))
-                temp_questions = []
+                # Widgets are just for display. We'll get the real values from session_state on submit.
+                st.text_input("作业标题", value=editable_data.get('title', ''), key=f"edited_title_{course['course_id']}")
+                
                 for i, q in enumerate(editable_data.get('questions', [])):
                     st.markdown(f"--- \n#### 第{i+1}题")
-                    question_text = st.text_area("题目内容", value=q.get('question', ''), key=f"q_text_{i}", height=100)
-                    question_type = q.get('type', 'text')
-                    options = q.get('options', [])
-                    current_q = {'id': q.get('id', f'q_{i}'), 'type': question_type, 'question': question_text}
-                    if question_type == 'multiple_choice':
-                        options_str = st.text_input("选项 (用英文逗号,分隔)", value=", ".join(options), key=f"q_opts_{i}")
-                        current_q['options'] = [opt.strip() for opt in options_str.split(',') if opt.strip()]
-                    temp_questions.append(current_q)
+                    st.text_area("题目内容", value=q.get('question', ''), key=f"q_text_{i}", height=100)
+                    
+                    if q.get('type') == 'multiple_choice':
+                        st.text_input("选项 (用英文逗号,分隔)", value=", ".join(q.get('options', [])), key=f"q_opts_{i}")
                 
                 submitted = st.form_submit_button("✅ 确认发布作业")
                 if submitted:
+                    # --- FIXED: Process form data *after* submission ---
+                    edited_title = st.session_state[f"edited_title_{course['course_id']}"]
+                    
                     course_hw_titles = [hw['title'] for hw in get_course_homework(course['course_id'])]
                     if edited_title in course_hw_titles:
                         st.error("本课程中已存在同名作业，请修改标题后发布。")
                     else:
+                        # Rebuild questions list from session_state here
+                        final_questions = []
+                        for i, q in enumerate(editable_data.get('questions', [])):
+                            question_text = st.session_state[f"q_text_{i}"]
+                            question_type = q.get('type', 'text')
+                            current_q = {'id': q.get('id', f'q_{i}'), 'type': question_type, 'question': question_text}
+                            if question_type == 'multiple_choice':
+                                options_str = st.session_state[f"q_opts_{i}"]
+                                current_q['options'] = [opt.strip() for opt in options_str.split(',') if opt.strip()]
+                            final_questions.append(current_q)
+
                         all_hw = get_all_homework()
                         homework_to_save = {
                             "homework_id": str(uuid.uuid4()), "course_id": course['course_id'],
-                            "title": edited_title, "questions": temp_questions
+                            "title": edited_title, "questions": final_questions
                         }
                         all_hw.append(homework_to_save)
                         if save_all_homework(all_hw):
