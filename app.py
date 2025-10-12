@@ -136,13 +136,13 @@ def display_login_form():
         st.header("🔐 用户登录/注册")
         if st.session_state.login_step == "enter_email":
             email = st.text_input("邮箱地址", key="email_input")
-            if st.button("发送验证码"): handle_send_code(email)
+            if st.button("发送验证码", use_container_width=True): handle_send_code(email)
         elif st.session_state.login_step == "enter_code":
             email_display = st.session_state.get("temp_email", "")
             st.info(f"验证码将发送至: {email_display}")
             code = st.text_input("验证码", key="code_input")
-            if st.button("登录或注册"): handle_verify_code(email_display, code)
-            if st.button("返回"): st.session_state.login_step = "enter_email"; st.rerun()
+            if st.button("登录或注册", use_container_width=True): handle_verify_code(email_display, code)
+            if st.button("返回", use_container_width=True): st.session_state.login_step = "enter_email"; st.rerun()
 
 def call_gemini_api(prompt_parts):
     try:
@@ -230,7 +230,7 @@ def render_teacher_dashboard(teacher_email):
     with st.expander("创建新课程"):
         with st.form("create_course_form", clear_on_submit=True):
             course_name = st.text_input("课程名称")
-            if st.form_submit_button("创建课程"):
+            if st.form_submit_button("创建课程", use_container_width=True):
                 if course_name.strip():
                     teacher_course_names = [c['course_name'] for c in get_teacher_courses(teacher_email)]
                     if course_name in teacher_course_names:
@@ -251,12 +251,12 @@ def render_teacher_dashboard(teacher_email):
             with st.container(border=True):
                 st.markdown(f"#### {course['course_name']}")
                 st.write(f"邀请码: `{course['join_code']}` | 学生人数: {len(course.get('student_emails', []))}")
-                if st.button("进入管理", key=f"manage_{course['course_id']}"):
+                if st.button("进入管理", key=f"manage_{course['course_id']}", use_container_width=True):
                     st.session_state.selected_course_id = course['course_id']; st.rerun()
 
 def render_course_management_view(course, teacher_email):
     st.header(f"课程管理: {course['course_name']}")
-    if st.button("返回课程列表"):
+    if st.button("返回课程列表", use_container_width=True):
         st.session_state.selected_course_id = None; st.rerun()
 
     tab1, tab2, tab3, tab4 = st.tabs(["作业管理", "学生管理", "成绩册", "📊 学情分析"])
@@ -273,7 +273,7 @@ def render_course_management_view(course, teacher_email):
                     with st.expander("查看题目"):
                         for i, q in enumerate(hw['questions']):
                             st.write(f"**第{i+1}题 ({q.get('type', 'text')}):** {q['question']}")
-                    if st.button("删除此作业", key=f"del_{hw['homework_id']}", type="primary"):
+                    if st.button("删除此作业", key=f"del_{hw['homework_id']}", type="primary", use_container_width=True):
                         all_hw = get_all_homework()
                         new_hw_list = [h for h in all_hw if h['homework_id'] != hw['homework_id']]
                         if save_all_homework(new_hw_list):
@@ -285,8 +285,7 @@ def render_course_management_view(course, teacher_email):
         st.subheader("用AI生成并发布新作业")
         topic = st.text_input("作业主题", key=f"topic_{course['course_id']}")
         details = st.text_area("具体要求", key=f"details_{course['course_id']}")
-        if st.button("AI 生成作业题目", key=f"gen_hw_{course['course_id']}"):
-            # --- FIXED: Clear previous results before generating new ones ---
+        if st.button("AI 生成作业题目", key=f"gen_hw_{course['course_id']}", use_container_width=True):
             if 'editable_homework' in st.session_state:
                 del st.session_state.editable_homework
             if 'generated_homework' in st.session_state:
@@ -336,7 +335,7 @@ def render_course_management_view(course, teacher_email):
             with cols_header[0]:
                 st.subheader("作业预览与发布 (可编辑)")
             with cols_header[1]:
-                if st.button("❌ 取消编辑"):
+                if st.button("❌ 取消编辑", use_container_width=True):
                     del st.session_state.editable_homework
                     st.rerun()
 
@@ -349,7 +348,7 @@ def render_course_management_view(course, teacher_email):
                     if q.get('type') == 'multiple_choice':
                         st.text_input("选项 (用英文逗号,分隔)", value=", ".join(q.get('options', [])), key=f"q_opts_{i}")
                 
-                submitted = st.form_submit_button("✅ 确认发布作业")
+                submitted = st.form_submit_button("✅ 确认发布作业", use_container_width=True)
                 if submitted:
                     edited_title = st.session_state[f"edited_title_{course['course_id']}"]
                     course_hw_titles = [hw['title'] for hw in get_course_homework(course['course_id'])]
@@ -383,7 +382,7 @@ def render_course_management_view(course, teacher_email):
         else:
             for student_email in student_list:
                 cols = st.columns([4, 1]); cols[0].write(f"- {student_email}")
-                if cols[1].button("移除", key=f"remove_{get_email_hash(student_email)}", type="primary"):
+                if cols[1].button("移除", key=f"remove_{get_email_hash(student_email)}", type="primary", use_container_width=True):
                     all_courses = get_all_courses()
                     target_course = next((c for c in all_courses if c['course_id'] == course['course_id']), None)
                     if target_course and student_email in target_course['student_emails']:
@@ -461,8 +460,52 @@ def render_course_management_view(course, teacher_email):
                         cols[1].error("未提交")
 
     with tab4:
-        # ... (Analysis tab)
-        pass
+        st.subheader("📊 班级学情分析")
+        homework_list = get_course_homework(course['course_id'])
+        if not homework_list:
+            st.info("本课程还没有已发布的作业，无法进行分析。")
+        else:
+            hw_options = {hw['title']: hw['homework_id'] for hw in homework_list}
+            selected_hw_title = st.selectbox("请选择要分析的作业", options=list(hw_options.keys()))
+
+            if st.button("开始分析", key=f"analyze_{hw_options[selected_hw_title]}", use_container_width=True):
+                with st.spinner("AI正在汇总分析全班的作业情况..."):
+                    selected_hw_id = hw_options[selected_hw_title]
+                    homework = get_homework(selected_hw_id)
+                    submissions = get_submissions_for_homework(selected_hw_id)
+                    graded_submissions = [s for s in submissions if s.get('status') == 'feedback_released']
+
+                    if len(graded_submissions) < 2:
+                        st.warning("已批改的提交人数过少（少于2人），无法进行有意义的分析。")
+                    else:
+                        performance_summary = [{"grade": sub['final_grade'], "detailed_grades": sub.get('ai_detailed_grades', [])} for sub in graded_submissions]
+                        prompt = f"""# 角色
+你是一位顶级的教育数据分析专家，任务是根据全班的作业提交数据，生成一份学情分析报告。
+# 数据
+## 作业题目
+{json.dumps(homework['questions'], ensure_ascii=False)}
+## 全班匿名批改数据汇总
+{json.dumps(performance_summary, ensure_ascii=False)}
+# 任务
+请根据以上数据，生成一份详细的学情分析报告，必须包含以下几个部分，并使用Markdown标题格式化：
+### 1. 总体表现总结
+班级整体得分情况（平均分、最高分、最低分），以及高分段（90-100）、中分段（60-89）、低分段（0-59）的学生人数分布。
+### 2. 知识点掌握情况
+逐题分析学生的平均得分率。明确指出哪些题目（代表的知识点）学生普遍掌握得最好，哪些掌握得最差。
+### 3. 典型错误分析
+总结学生们在失分较多的题目中出现的常见错误类型，并举例说明。
+### 4. 教学建议
+基于以上分析，给老师提出2-3条具体的、可操作的教学建议，比如需要重点讲解或补充练习哪些内容。
+---
+请开始生成您的学情分析报告。"""
+                        analysis_report = call_gemini_api(prompt)
+                        if analysis_report:
+                            st.markdown("---")
+                            st.markdown("### 学情分析报告")
+                            st.markdown(analysis_report)
+                        else:
+                            st.error("无法生成学情分析报告。")
+
 
 def render_student_dashboard(student_email):
     st.header("学生仪表盘")
@@ -472,7 +515,7 @@ def render_student_dashboard(student_email):
     with tab2:
         with st.form("join_course_form", clear_on_submit=True):
             join_code = st.text_input("请输入课程邀请码").upper()
-            if st.form_submit_button("加入课程"):
+            if st.form_submit_button("加入课程", use_container_width=True):
                 if not join_code: st.warning("请输入邀请码。")
                 else:
                     all_courses = get_all_courses()
@@ -506,13 +549,13 @@ def render_student_dashboard(student_email):
                             status = submission.get('status', 'submitted')
                             if status == 'feedback_released':
                                 cols[1].success(f"已批改: {submission.get('final_grade', 'N/A')}/100")
-                                if cols[2].button("查看结果", key=f"view_{hw['homework_id']}"):
+                                if cols[2].button("查看结果", key=f"view_{hw['homework_id']}", use_container_width=True):
                                     st.session_state.viewing_homework_id = hw['homework_id']; st.rerun()
                             else:
                                 cols[1].info("已提交"); cols[2].write("待批改")
                         else:
                             cols[1].warning("待完成")
-                            if cols[2].button("开始作业", key=f"do_{hw['homework_id']}"):
+                            if cols[2].button("开始作业", key=f"do_{hw['homework_id']}", use_container_width=True):
                                 st.session_state.viewing_homework_id = hw['homework_id']; st.rerun()
     
     with tab3:
@@ -522,13 +565,13 @@ def render_student_dashboard(student_email):
                 name = st.text_input("姓名", value=user_profile.get("name", ""))
                 class_name = st.text_input("班级", value=user_profile.get("class_name", ""))
                 student_id = st.text_input("学号", value=user_profile.get("student_id", ""))
-                if st.form_submit_button("保存信息"):
+                if st.form_submit_button("保存信息", use_container_width=True):
                     user_profile['name'] = name
                     user_profile['class_name'] = class_name
                     user_profile['student_id'] = student_id
                     if save_user_profile(student_email, user_profile):
                         st.success("个人信息已更新！")
-                        st.cache_data.clear() # Clear cache to reflect changes
+                        st.cache_data.clear() 
                     else:
                         st.error("保存失败，请稍后再试。")
         else:
@@ -553,7 +596,7 @@ def render_homework_submission_view(homework, student_email):
                 st.text_area("文字回答", key=f"text_{q_key}", height=150)
                 st.file_uploader("添加图片附件", accept_multiple_files=True, type=['png', 'jpg', 'jpeg'], key=f"files_{q_key}")
 
-        submitted = st.form_submit_button("确认提交所有回答")
+        submitted = st.form_submit_button("确认提交所有回答", use_container_width=True)
         if submitted:
             with st.spinner("正在处理并提交您的作业..."):
                 final_answers = {}
@@ -639,7 +682,7 @@ def render_teacher_grading_view(submission, homework):
     st.subheader(f"学生: {submission['student_email']}")
     st.write(f"作业: {homework['title']}")
     
-    if st.button("🤖 AI自动批改", key=f"ai_grade_{submission['submission_id']}"):
+    if st.button("🤖 AI自动批改", key=f"ai_grade_{submission['submission_id']}", use_container_width=True):
         with st.spinner("AI正在进行多模态分析与批改..."):
             instruction_prompt = """# 角色
 你是一位经验丰富、耐心且善于引导的教学助手。
@@ -739,7 +782,7 @@ def render_teacher_grading_view(submission, homework):
     final_feedback = st.text_area("最终评语", value=initial_feedback, height=200, key=f"final_feedback_{submission['submission_id']}")
 
     button_text = "✅ 更新并反馈给学生" if submission.get('status') == 'feedback_released' else "✅ 确认并将结果反馈给学生"
-    if st.button(button_text, type="primary"):
+    if st.button(button_text, type="primary", use_container_width=True):
         submission['status'] = "feedback_released"
         submission['final_grade'] = final_grade
         submission['final_feedback'] = final_feedback
@@ -765,7 +808,7 @@ else:
     user_email = st.session_state.user_email
     with st.sidebar:
         st.success(f"欢迎, {user_email}")
-        if st.button("退出登录"):
+        if st.button("退出登录", use_container_width=True):
             for key in list(st.session_state.keys()): del st.session_state[key]
             st.query_params.clear(); st.rerun()
 
