@@ -26,7 +26,8 @@ if 'selected_course_id' not in st.session_state: st.session_state.selected_cours
 MS_GRAPH_CONFIG = st.secrets["microsoft_graph"]
 try:
     genai.configure(api_key=st.secrets["gemini_api"]["api_key"])
-    MODEL = genai.GenerativeModel('gemini-pro')
+    # --- FIX: 使用您账户明确支持的模型名称 ---
+    MODEL = genai.GenerativeModel('gemini-2.5-flash')
     SAFETY_SETTINGS = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -35,6 +36,7 @@ try:
     ]
 except Exception as e:
     st.error(f"Gemini API密钥配置失败，请检查secrets.toml文件: {e}")
+
 
 # --- 核心功能函数定义 ---
 def get_email_hash(email): 
@@ -74,14 +76,10 @@ def save_onedrive_data(path, data):
 
 def delete_onedrive_file(path):
     try:
-        token = get_ms_graph_token()
-        headers = {"Authorization": f"Bearer {token}"}
+        token = get_ms_graph_token(); headers = {"Authorization": f"Bearer {token}"}
         response = onedrive_api_request('delete', path, headers)
-        response.raise_for_status()
-        return True
-    except Exception as e:
-        st.error(f"删除文件失败: {e}")
-        return False
+        response.raise_for_status(); return True
+    except Exception as e: st.error(f"删除文件失败: {e}"); return False
 
 def get_user_profile(email): return get_onedrive_data(f"{BASE_ONEDRIVE_PATH}/users/{get_email_hash(email)}.json")
 def save_user_profile(email, data): return save_onedrive_data(f"{BASE_ONEDRIVE_PATH}/users/{get_email_hash(email)}.json", data)
@@ -196,7 +194,7 @@ def render_course_management_view(course, teacher_email):
         st.subheader("已发布的作业")
         course_homeworks = get_course_homework(course['course_id'])
         if not course_homeworks:
-            st.info("本课程暂无已发布的作业。")
+            st.info("本课程暂无作业。")
         else:
             for hw in course_homeworks:
                 with st.container(border=True):
