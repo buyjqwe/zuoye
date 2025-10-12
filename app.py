@@ -286,6 +286,12 @@ def render_course_management_view(course, teacher_email):
         topic = st.text_input("作业主题", key=f"topic_{course['course_id']}")
         details = st.text_area("具体要求", key=f"details_{course['course_id']}")
         if st.button("AI 生成作业题目", key=f"gen_hw_{course['course_id']}"):
+            # --- FIXED: Clear previous results before generating new ones ---
+            if 'editable_homework' in st.session_state:
+                del st.session_state.editable_homework
+            if 'generated_homework' in st.session_state:
+                 del st.session_state.generated_homework
+
             if topic and details:
                 with st.spinner("AI正在为您生成题目..."):
                     prompt = f"""# 角色
