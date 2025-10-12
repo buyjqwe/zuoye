@@ -383,19 +383,71 @@ def render_course_management_view(course, teacher_email):
                     if st.button(f"🤖 一键AI批量批改 ({len(pending_subs)}份)", key=f"batch_grade_{hw['homework_id']}", disabled=not pending_subs, use_container_width=True):
                         progress_bar = st.progress(0, text="正在批量批改...")
                         for i, sub_to_grade in enumerate(pending_subs):
-                            sub_to_grade['status'] = 'ai_graded'
-                            sub_to_grade['ai_grade'] = "N/A"
-                            sub_to_grade['ai_feedback'] = "批量批改完成，请审核。"
-                            sub_to_grade['ai_detailed_grades'] = []
-                            path = f"{BASE_ONEDRIVE_PATH}/submissions/{sub_to_grade['homework_id']}/{get_email_hash(sub_to_grade['student_email'])}/submission.json"
-                            save_onedrive_data(path, sub_to_grade)
-                            progress_bar.progress((i + 1) / len(pending_subs), text=f"正在批量批改... {i+1}/{len(pending_subs)}")
+                            progress_text = f"正在批改 {sub_to_grade['student_email']} 的作业... {i+1}/{len(pending_subs)}"
+                            progress_bar.progress((i + 1) / len(pending_subs), text=progress_text)
+                            
+                            all_answers = sub_to_grade.get('answers', {})
+                            instruction_prompt = "..." # Same prompt as single grading
+                            text_data_part = f"【作业题目】: {json.dumps(hw['questions'], ensure_ascii=False, indent=2)}\n【学生结构化回答】: {json.dumps(all_answers, ensure_ascii=False, indent=2)}"
+                            api_prompt_parts = [instruction_prompt, text_data_part]
+                            # Add images to prompt
+                            for q_key, answer_data in all_answers.items():
+                                if answer_data.get('attachments'):
+                                    for filename in answer_data['attachments']:
+                                        file_path = f"{BASE_ONEDRIVE_PATH}/submissions/{hw['homework_id']}/{get_email_hash(sub_to_grade['student_email'])}/{filename}"
+                                        file_bytes = get_onedrive_data(file_path, is_json=False)
+                                        if file_bytes:
+                                            api_prompt_parts.append(f"--- 附件 '{filename}' (属于题目 {q_key}) 内容 ---")
+                                            api_prompt_parts.append(Image.open(io.BytesIO(file_bytes)))
+
+                            ai_result_text = call_gemini_api(api_prompt_parts)
+                            if ai_result_text:
+                                try:
+                                    json_str = ai_result_text.strip().replace("```json", "").replace("```", "")
+                                    ai_result = json.loads(json_str)
+                                    sub_to_grade['status'] = 'ai_graded'
+                                    sub_to_grade['ai_grade'] = ai_result.get('overall_grade')
+                                    sub_to_grade['ai_feedback'] = ai_result.get('overall_feedback')
+                                    sub_to_grade['ai_detailed_grades'] = ai_result.get('detailed_grades')
+                                    path = f"{BASE_ONEDRIVE_PATH}/submissions/{sub_to_grade['homework_id']}/{get_email_hash(sub_to_grade['student_email'])}/submission.json"
+                                    save_onedrive_data(path, sub_to_grade)
+                                except Exception:
+                                    st.toast(f"批改 {sub_to_grade['student_email']} 时AI返回格式错误，已跳过。", icon="⚠️")
+                        
                         st.success("批量批改完成！"); st.cache_data.clear(); time.sleep(1); st.rerun()
 
                 with col2:
                     if st.button(f"📚 一键生成补习作业 ({len(graded_subs_for_remedial)}份)", key=f"batch_remedial_{hw['homework_id']}", disabled=not graded_subs_for_remedial, use_container_width=True):
-                        st.info("批量生成补习作业功能开发中...")
+                        progress_bar = st.progress(0, text="正在批量生成补习作业...")
+                        all_hw_list = get_all_homework()
+                        for i, sub_for_remedial in enumerate(graded_subs_for_remedial):
+                            progress_text = f"正在为 {sub_for_remedial['student_email']} 生成... {i+1}/{len(graded_subs_for_remedial)}"
+                            progress_bar.progress((i + 1) / len(graded_subs_for_remedial), text=progress_text)
 
+                            original_homework = get_homework(sub_for_remedial['homework_id'])
+                            if not original_homework: continue
+                            
+                            prompt = f"""...""" # Same prompt as single remedial
+                            remedial_hw_text = call_gemini_api(prompt)
+                            if remedial_hw_text:
+                                try:
+                                    json_str = remedial_hw_text.strip().replace("```json", "").replace("```", "")
+                                    remedial_hw_data = json.loads(json_str)
+                                    new_hw_id = "remedial_" + str(uuid.uuid4())
+                                    homework_to_save = {
+                                        "homework_id": new_hw_id, "course_id": original_homework['course_id'],
+                                        "student_email": sub_for_remedial['student_email'], "original_homework_id": original_homework['homework_id'],
+                                        "title": remedial_hw_data.get('title', f"补习作业 for {original_homework['title']}"),
+                                        "questions": remedial_hw_data.get('questions', [])
+                                    }
+                                    all_hw_list.append(homework_to_save)
+                                except Exception as e:
+                                    st.toast(f"为 {sub_for_remedial['student_email']} 生成时AI格式错误", icon="⚠️")
+
+                        if save_all_homework(all_hw_list):
+                            st.success("批量生成补习作业完成！"); st.cache_data.clear(); time.sleep(1); st.rerun()
+                        else:
+                            st.error("保存补习作业失败。")
                 st.divider()
                 
                 all_students = course.get('student_emails', [])
