@@ -1,12 +1,6 @@
-# requirements.txt
-google-generativeai
-plotly
-Pillow
-pandas
 streamlit
-tabulate
-supabase
 requests
-yfinance
-
-
+google-generativeai
+pandas
+Pillow
+streamlit-drawable-canvas
