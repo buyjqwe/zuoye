@@ -261,81 +261,112 @@ def render_course_management_view(course, teacher_email):
                         if delete_onedrive_file(path):
                             st.success("作业已删除！"); st.cache_data.clear(); time.sleep(1); st.rerun()
         st.divider()
-        with st.expander("用AI生成并发布新作业"):
-            topic = st.text_input("作业主题", key=f"topic_{course['course_id']}")
-            details = st.text_area("具体要求", key=f"details_{course['course_id']}")
-            if st.button("AI 生成作业题目", key=f"gen_hw_{course['course_id']}"):
-                if topic and details:
-                    with st.spinner("AI正在为您生成题目..."):
-                        prompt = f"""你是一位教学经验丰富的老师。请为课程 '{course['course_name']}' 生成一份关于 '{topic}' 的作业。具体要求是: {details}。请严格按照以下JSON格式输出，不要有任何额外的解释文字：
-                        {{ "title": "{topic} - 单元作业", "questions": [ {{"id":"q0", "type": "text", "question": "..."}}, {{"id":"q1", "type": "multiple_choice", "question": "...", "options": ["A", "B", "C"]}} ] }}"""
-                        response_text = call_gemini_api(prompt)
-                        if response_text: 
-                            st.session_state.generated_homework = response_text
-                            st.success("作业已生成！请在下方编辑和发布。")
-                else: st.warning("请输入作业主题和具体要求。")
 
-            if 'generated_homework' in st.session_state and 'editable_homework' not in st.session_state:
-                try:
-                    json_str_raw = st.session_state.generated_homework.strip().replace("```json", "").replace("```", "")
-                    st.session_state.editable_homework = json.loads(json_str_raw)
-                except Exception as e:
-                    st.error(f"AI返回格式有误，无法编辑: {e}")
-                    st.code(st.session_state.generated_homework)
-                finally:
-                    del st.session_state.generated_homework
+        # --- MODIFIED: Removed expander for a direct UI ---
+        st.subheader("用AI生成并发布新作业")
+        topic = st.text_input("作业主题", key=f"topic_{course['course_id']}")
+        details = st.text_area("具体要求", key=f"details_{course['course_id']}")
+        if st.button("AI 生成作业题目", key=f"gen_hw_{course['course_id']}"):
+            if topic and details:
+                with st.spinner("AI正在为您生成题目..."):
+                    # --- MODIFIED: Enhanced prompt for better structure ---
+                    prompt = f"""你是一位教学经验丰富的老师。请为课程 '{course['course_name']}' 生成一份关于 '{topic}' 的作业。
+具体要求是: {details}。
 
-            if 'editable_homework' in st.session_state:
-                cols_header = st.columns([3, 1])
-                with cols_header[0]:
-                    st.subheader("作业预览与发布 (可编辑)")
-                with cols_header[1]:
-                    if st.button("❌ 取消编辑"):
-                        del st.session_state.editable_homework
-                        st.rerun()
+**重要规则**:
+1.  请生成 3 到 5 道独立的题目。
+2.  每道题都必须是一个单独的 JSON 对象，并包含在 "questions" 列表中。
+3.  不要将多道题合并到一道题的 "question" 字段中。
 
-                with st.form("edit_homework_form"):
-                    editable_data = st.session_state.editable_homework
-                    edited_title = st.text_input("作业标题", value=editable_data.get('title', ''))
+请严格按照以下JSON格式输出，不要有任何额外的解释文字：
+{{
+  "title": "{topic} - 单元作业",
+  "questions": [
+    {{
+      "id": "q0",
+      "type": "text",
+      "question": "这里是第一道独立的题目内容..."
+    }},
+    {{
+      "id": "q1",
+      "type": "multiple_choice",
+      "question": "这里是第二道独立的题目内容...",
+      "options": ["选项A", "选项B", "选项C"]
+    }},
+    {{
+      "id": "q2",
+      "type": "text",
+      "question": "这里是第三道独立的题目内容..."
+    }}
+  ]
+}}"""
+                    response_text = call_gemini_api(prompt)
+                    if response_text: 
+                        st.session_state.generated_homework = response_text
+                        st.success("作业已生成！请在下方编辑和发布。")
+            else: st.warning("请输入作业主题和具体要求。")
+
+        if 'generated_homework' in st.session_state and 'editable_homework' not in st.session_state:
+            try:
+                json_str_raw = st.session_state.generated_homework.strip().replace("```json", "").replace("```", "")
+                st.session_state.editable_homework = json.loads(json_str_raw)
+            except Exception as e:
+                st.error(f"AI返回格式有误，无法编辑: {e}")
+                st.code(st.session_state.generated_homework)
+            finally:
+                del st.session_state.generated_homework
+
+        if 'editable_homework' in st.session_state:
+            cols_header = st.columns([3, 1])
+            with cols_header[0]:
+                st.subheader("作业预览与发布 (可编辑)")
+            with cols_header[1]:
+                if st.button("❌ 取消编辑"):
+                    del st.session_state.editable_homework
+                    st.rerun()
+
+            with st.form("edit_homework_form"):
+                editable_data = st.session_state.editable_homework
+                edited_title = st.text_input("作业标题", value=editable_data.get('title', ''))
+                
+                temp_questions = []
+                for i, q in enumerate(editable_data.get('questions', [])):
+                    st.markdown(f"--- \n#### 第{i+1}题")
+                    question_text = st.text_area("题目内容", value=q.get('question', ''), key=f"q_text_{i}", height=100)
                     
-                    temp_questions = []
-                    for i, q in enumerate(editable_data.get('questions', [])):
-                        st.markdown(f"--- \n#### 第{i+1}题")
-                        question_text = st.text_area("题目内容", value=q.get('question', ''), key=f"q_text_{i}", height=100)
-                        
-                        question_type = q.get('type', 'text')
-                        options = q.get('options', [])
-                        
-                        current_q = {
-                            'id': q.get('id', f'q_{i}'),
-                            'type': question_type,
-                            'question': question_text
-                        }
+                    question_type = q.get('type', 'text')
+                    options = q.get('options', [])
+                    
+                    current_q = {
+                        'id': q.get('id', f'q_{i}'),
+                        'type': question_type,
+                        'question': question_text
+                    }
 
-                        if question_type == 'multiple_choice':
-                            options_str = st.text_input("选项 (用英文逗号,分隔)", value=", ".join(options), key=f"q_opts_{i}")
-                            current_q['options'] = [opt.strip() for opt in options_str.split(',') if opt.strip()]
+                    if question_type == 'multiple_choice':
+                        options_str = st.text_input("选项 (用英文逗号,分隔)", value=", ".join(options), key=f"q_opts_{i}")
+                        current_q['options'] = [opt.strip() for opt in options_str.split(',') if opt.strip()]
 
-                        temp_questions.append(current_q)
+                    temp_questions.append(current_q)
 
-                    submitted = st.form_submit_button("✅ 确认发布作业")
-                    if submitted:
-                        homework_id = str(uuid.uuid4())
-                        homework_to_save = {
-                            "homework_id": homework_id,
-                            "course_id": course['course_id'],
-                            "title": edited_title,
-                            "questions": temp_questions
-                        }
-                        path = f"{BASE_ONEDRIVE_PATH}/homework/{homework_id}.json"
-                        if save_onedrive_data(path, homework_to_save):
-                            st.success(f"作业已成功发布！")
-                            del st.session_state.editable_homework
-                            st.cache_data.clear()
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error("作业发布失败。")
+                submitted = st.form_submit_button("✅ 确认发布作业")
+                if submitted:
+                    homework_id = str(uuid.uuid4())
+                    homework_to_save = {
+                        "homework_id": homework_id,
+                        "course_id": course['course_id'],
+                        "title": edited_title,
+                        "questions": temp_questions
+                    }
+                    path = f"{BASE_ONEDRIVE_PATH}/homework/{homework_id}.json"
+                    if save_onedrive_data(path, homework_to_save):
+                        st.success(f"作业已成功发布！")
+                        del st.session_state.editable_homework
+                        st.cache_data.clear()
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("作业发布失败。")
 
 
     with tab2:
@@ -511,7 +542,6 @@ def render_student_graded_view(submission, homework):
     else:
         st.info("暂无逐题的AI反馈。")
 
-# --- NEW: Helper for MIME types ---
 def get_mime_type(filename):
     ext = filename.split('.')[-1].lower()
     types = {
@@ -544,7 +574,6 @@ def render_teacher_grading_view(submission, homework):
     if submission.get('status') != 'feedback_released':
         if st.button("🤖 AI自动批改", key=f"ai_grade_{submission['submission_id']}"):
             with st.spinner("AI正在进行多模态分析与批改..."):
-                # --- REVAMPED: New prompt for advanced multimodal analysis ---
                 instruction_prompt = """# 角色
 你是一位经验丰富、耐心且善于引导的教学助手。你的专长是分析多媒体作业提交，包括文本、图片、音频和视频。
 # 任务
@@ -578,7 +607,6 @@ def render_teacher_grading_view(submission, homework):
                 
                 api_prompt_parts = [instruction_prompt, text_data_part]
 
-                # --- REVAMPED: Process and append all media types correctly ---
                 for filename in attachments:
                     file_path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(submission['student_email'])}/{filename}"
                     mime_type = get_mime_type(filename)
@@ -589,10 +617,8 @@ def render_teacher_grading_view(submission, homework):
                     file_bytes = get_onedrive_data(file_path, is_json=False)
                     if file_bytes:
                         api_prompt_parts.append(f"--- 附件 '{filename}' 内容 ---")
-                        # For videos and audios, use genai.Part to send raw bytes with mime_type
                         if mime_type.startswith('video/') or mime_type.startswith('audio/'):
                             api_prompt_parts.append(genai.Part.from_data(mime_type=mime_type, data=file_bytes))
-                        # For images, send as PIL Image object
                         elif mime_type.startswith('image/'):
                              api_prompt_parts.append(Image.open(io.BytesIO(file_bytes)))
                     else:
