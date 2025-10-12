@@ -1,92 +1,58 @@
 import streamlit as st
-import requests
+from supabase import create_client, Client
 import time
 
-# --- OneDrive 连接诊断程序 ---
+# --- Supabase 连接诊断程序 ---
 
-# 原封不动地复制您项目中的这两个函数
-@st.cache_data(ttl=3500)
-def get_ms_graph_token():
-    # 这个函数直接从您的项目中复制过来，确保逻辑一致
-    ms_secrets = st.secrets["microsoft_graph"]
-    url = f"https://login.microsoftonline.com/{ms_secrets['tenant_id']}/oauth2/v2.0/token"
-    data = {
-        "grant_type": "client_credentials",
-        "client_id": ms_secrets['client_id'],
-        "client_secret": ms_secrets['client_secret'],
-        "scope": "https://graph.microsoft.com/.default"
-    }
-    resp = requests.post(url, data=data, timeout=20)
-    resp.raise_for_status()
-    return resp.json()
-
-# --- 主测试逻辑 ---
 st.set_page_config(layout="wide")
-st.title("OneDrive 连接诊断")
+st.title("Supabase 连接诊断")
 
 # 步骤 1: 读取 Secrets
 st.header("步骤 1: 读取 Secrets")
 try:
-    ms_secrets = st.secrets["microsoft_graph"]
-    st.success("✅ 成功读取 `microsoft_graph` 配置！")
-    # 为了安全，不显示 client_secret
+    supabase_secrets = st.secrets["supabase"]
+    st.success("✅ 成功读取 `supabase` 配置！")
+    # 为了安全，不完全显示密钥
     st.json({
-        "tenant_id": ms_secrets.get("tenant_id"),
-        "client_id": ms_secrets.get("client_id"),
-        "sender_email": ms_secrets.get("sender_email"),
-        "admin_email": ms_secrets.get("admin_email"),
+        "url": supabase_secrets.get("url"),
+        "anon_key (前15位)": supabase_secrets.get("anon_key", "")[:15] + "...",
+        "service_key (前15位)": supabase_secrets.get("service_key", "")[:15] + "..."
     })
 except Exception as e:
-    st.error(f"❌ 读取 `secrets.toml` 文件中的 `[microsoft_graph]` 部分失败: {e}")
+    st.error(f"❌ 读取 `secrets.toml` 文件中的 `[supabase]` 部分失败: {e}")
     st.stop()
 
-# 步骤 2: 获取 Access Token
-st.header("步骤 2: 获取 Access Token")
-token_data = None
+# 步骤 2: 初始化 Supabase 客户端
+st.header("步骤 2: 初始化 Supabase 客户端")
+supabase: Client = None
 try:
-    with st.spinner("正在向 Microsoft Graph API 请求访问令牌..."):
-        token_data = get_ms_graph_token()
+    with st.spinner("正在初始化 Supabase 客户端..."):
+        SUPABASE_URL = supabase_secrets["url"]
+        SUPABASE_KEY = supabase_secrets["service_key"]
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    if token_data and "access_token" in token_data:
-        st.success("✅ 成功获取 Access Token！")
-        st.write(f"令牌 (前15位): `{token_data['access_token'][:15]}...`")
+    if supabase:
+        st.success("✅ Supabase 客户端初始化成功！")
     else:
-        st.error("❌ 获取 Access Token 失败，返回的数据不包含令牌。")
-        st.json(token_data)
+        st.error("❌ Supabase 客户端初始化失败，返回了空对象。")
         st.stop()
 except Exception as e:
-    st.error(f"❌ 在获取 Access Token 时发生崩溃: {e}")
-    # 尝试显示更详细的API错误信息
-    if hasattr(e, 'response') and e.response is not None:
-        st.write("API返回的详细错误信息:")
-        st.json(e.response.json())
+    st.error(f"❌ 在初始化 Supabase 客户端时发生崩溃: {e}")
     st.stop()
 
-# 步骤 3: 尝试访问 OneDrive
-st.header("步骤 3: 尝试访问 OneDrive 文件")
+# 步骤 3: 尝试从数据库读取数据
+st.header("步骤 3: 尝试从数据库读取数据")
 try:
-    with st.spinner("正在尝试访问 OneDrive 根目录..."):
-        token = token_data["access_token"]
-        headers = {"Authorization": f"Bearer {token}"}
-        # 我们不访问具体文件，只访问App根目录，这总应该是成功的
-        url = f"https://graph.microsoft.com/v1.0/users/{ms_secrets['sender_email']}/drive/root:/Apps/StreamlitDashboard"
-        
-        response = requests.get(url, headers=headers, timeout=20)
-        response.raise_for_status()
+    with st.spinner("正在尝试连接数据库并查询 `users` 表..."):
+        # 我们尝试从'users'表中获取数据，即使表是空的，这个查询本身也应该成功
+        response = supabase.table('users').select('*', count='exact').limit(1).execute()
 
-    st.success("✅ 成功连接到 OneDrive 并访问应用文件夹！")
-    st.write("诊断通过！您的 Microsoft Graph API 配置和网络连接均正常。")
+    st.success("✅ 成功连接到 Supabase 数据库并执行了查询！")
+    st.write(f"查询到 `users` 表中共有 {response.count} 条记录。")
     st.balloons()
+    st.info("诊断通过！您的 Supabase 配置和网络连接均正常。现在您可以将代码换回主程序了。")
 
-except requests.exceptions.HTTPError as e:
-    if e.response.status_code == 404:
-        st.warning("⚠️ OneDrive 连接成功，但找不到 `/Apps/StreamlitDashboard` 文件夹 (404)。")
-        st.info("这通常是正常的，说明文件夹尚未创建。**诊断通过！**")
-        st.balloons()
-    else:
-        st.error(f"❌ 访问 OneDrive 时发生 HTTP 错误 (状态码: {e.response.status_code})")
-        st.write("API返回的详细错误信息:")
-        st.json(e.response.json())
 except Exception as e:
-    st.error(f"❌ 访问 OneDrive 时发生未知崩溃: {e}")
+    st.error(f"❌ 访问 Supabase 数据库时发生崩溃: {e}")
+    st.write("这通常意味着您的 `service_key` 不正确，或者数据库的网络访问策略限制了连接。")
     st.stop()
