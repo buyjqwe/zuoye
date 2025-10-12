@@ -256,7 +256,7 @@ def render_teacher_dashboard(teacher_email):
 
 def render_course_management_view(course, teacher_email):
     st.header(f"课程管理: {course['course_name']}")
-    st.caption(f"课程邀请码: `{course.get('join_code', 'N/A')}`") # Display invitation code
+    st.caption(f"课程邀请码: `{course.get('join_code', 'N/A')}`")
     if st.button("返回课程列表", use_container_width=True):
         st.session_state.selected_course_id = None; st.rerun()
 
@@ -405,7 +405,7 @@ def render_course_management_view(course, teacher_email):
                 pending_subs = [s for s in submissions if s.get('status') == 'submitted']
                 graded_subs_for_remedial = [s for s in submissions if s.get('status') == 'feedback_released' and s.get('final_grade', 100) < 80]
 
-                action_cols = st.columns(3)
+                action_cols = st.columns(2)
                 with action_cols[0]:
                     if st.button(f"🤖 一键AI批量批改 ({len(pending_subs)}份)", key=f"batch_grade_{hw['homework_id']}", disabled=not pending_subs, use_container_width=True):
                         # ... Batch grading logic ...
@@ -413,10 +413,6 @@ def render_course_management_view(course, teacher_email):
                 with action_cols[1]:
                      if st.button(f"📚 一键生成补习作业 ({len(graded_subs_for_remedial)}份)", key=f"batch_remedial_{hw['homework_id']}", disabled=not graded_subs_for_remedial, use_container_width=True):
                         # ... Batch remedial logic ...
-                        pass
-                with action_cols[2]:
-                    if st.button("🕵️ 检查答案相似度", key=f"plagiarism_{hw['homework_id']}", use_container_width=True):
-                        # ... Plagiarism check logic ...
                         pass
                 
                 # Placeholder for CSV download button
