@@ -566,12 +566,16 @@ def render_student_dashboard(student_email):
                 class_name = st.text_input("班级", value=user_profile.get("class_name", ""))
                 student_id = st.text_input("学号", value=user_profile.get("student_id", ""))
                 if st.form_submit_button("保存信息", use_container_width=True):
-                    user_profile['name'] = name
-                    user_profile['class_name'] = class_name
-                    user_profile['student_id'] = student_id
-                    if save_user_profile(student_email, user_profile):
+                    # FIX: Create a copy to avoid mutating cached object
+                    updated_profile = user_profile.copy()
+                    updated_profile['name'] = name
+                    updated_profile['class_name'] = class_name
+                    updated_profile['student_id'] = student_id
+                    if save_user_profile(student_email, updated_profile):
                         st.success("个人信息已更新！")
-                        st.cache_data.clear() 
+                        st.cache_data.clear()
+                        time.sleep(1)
+                        st.rerun()
                     else:
                         st.error("保存失败，请稍后再试。")
         else:
