@@ -1,6 +1,6 @@
 streamlit
 requests
-google-generativeai
+google-generativeai>=0.4.0
 pandas
 Pillow
 streamlit-drawable-canvas
