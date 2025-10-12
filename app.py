@@ -31,7 +31,7 @@ if 'ai_feedback' not in st.session_state: st.session_state.ai_feedback = None
 MS_GRAPH_CONFIG = st.secrets["microsoft_graph"]
 try:
     genai.configure(api_key=st.secrets["gemini_api"]["api_key"])
-    MODEL = genai.GenerativeModel('gemini-1.5-flash')
+    MODEL = genai.GenerativeModel('gemini-2.5-flash')
     SAFETY_SETTINGS = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
