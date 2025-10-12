@@ -88,7 +88,7 @@ def delete_onedrive_file(path):
     except Exception: return False
 
 def get_user_profile(email): return get_onedrive_data(f"{BASE_ONEDRIVE_PATH}/users/{get_email_hash(email)}.json")
-def save_user_profile(email, data): return save_onedrive_data(f"{BASE_ONEDRIVE_PATH}/users/{get_email_hash(email)}.json", is_json=True)
+def save_user_profile(email, data): return save_onedrive_data(f"{BASE_ONEDRIVE_PATH}/users/{get_email_hash(email)}.json", data, is_json=True)
 def get_global_data(file_name): data = get_onedrive_data(f"{BASE_ONEDRIVE_PATH}/{file_name}.json"); return data if data else {}
 def save_global_data(file_name, data): return save_onedrive_data(f"{BASE_ONEDRIVE_PATH}/{file_name}.json", data)
 
@@ -111,7 +111,8 @@ def handle_verify_code(email, code):
         sessions, token = get_global_data("sessions"), secrets.token_hex(16)
         sessions[token] = {"email": email, "expires_at": time.time() + (7 * 24 * 60 * 60)}
         save_global_data("sessions", sessions); del codes[email]; save_global_data("codes", codes)
-        st.session_state.logged_in, st.session_state.user_email, st.session_state.login_step, st.query_params["session_token"] = True, email, "logged_in", token
+        st.session_state.logged_in, st.session_state.user_email, st.session_state.login_step = True, email, "logged_in"
+        st.query_params["session_token"] = token
         st.rerun()
     else: st.sidebar.error("验证码错误。")
 
@@ -247,7 +248,7 @@ def render_course_management_view(course, teacher_email):
         st.session_state.selected_course_id = None; st.rerun()
 
     tab1, tab2, tab3, tab4 = st.tabs(["作业管理", "学生管理", "成绩册", "📊 学情分析"])
-    
+
     with tab1:
         st.subheader("已发布的作业")
         course_homeworks = get_course_homework(course['course_id'])
@@ -280,11 +281,8 @@ def render_course_management_view(course, teacher_email):
             if 'generated_homework' in st.session_state:
                 st.subheader("作业预览与发布")
                 try:
-                    # --- FIX: Escape backslashes before parsing JSON ---
                     json_str_raw = st.session_state.generated_homework.strip().replace("```json", "").replace("```", "")
-                    json_str_fixed = json_str_raw.replace('\\', '\\\\')
-                    homework_data = json.loads(json_str_fixed)
-
+                    homework_data = json.loads(json_str_raw)
                     with st.container(border=True):
                         st.write(f"**标题:** {homework_data['title']}")
                         for i, q in enumerate(homework_data['questions']):
@@ -299,7 +297,7 @@ def render_course_management_view(course, teacher_email):
                 except Exception as e:
                     st.error(f"AI返回格式有误: {e}"); st.code(st.session_state.generated_homework)
 
-    with tab2: 
+    with tab2:
         st.subheader("学生管理")
         student_list = course.get('student_emails', [])
         if not student_list:
@@ -312,13 +310,13 @@ def render_course_management_view(course, teacher_email):
                     path = f"{BASE_ONEDRIVE_PATH}/courses/{course['course_id']}.json"
                     if save_onedrive_data(path, course): st.success(f"已移除 {student_email}"); st.cache_data.clear(); time.sleep(1); st.rerun()
                     else: st.error("操作失败。")
-            
+
     with tab3:
         st.subheader("成绩册")
         homework_list = get_course_homework(course['course_id'])
         if not homework_list:
             st.info("本课程还没有已发布的作业。"); return
-        
+
         for hw in homework_list:
             with st.expander(f"**{hw['title']}**", expanded=True):
                 submissions = get_submissions_for_homework(hw['homework_id'])
@@ -327,9 +325,62 @@ def render_course_management_view(course, teacher_email):
 
                 if st.button(f"🤖 一键AI批改所有未批改作业 ({len(pending_subs)}份)", key=f"batch_grade_{hw['homework_id']}", disabled=not pending_subs):
                     progress_bar = st.progress(0, text="正在批量批改...")
+                    total_subs = len(pending_subs)
                     for i, sub_to_grade in enumerate(pending_subs):
-                        # ... (批量批改逻辑)
-                        progress_bar.progress((i + 1) / len(pending_subs), text=f"正在批量批改... {i+1}/{len(pending_subs)}")
+                        progress_bar.progress((i + 1) / total_subs, text=f"正在批改 {sub_to_grade['student_email']} 的作业... {i+1}/{total_subs}")
+                        homework_for_sub = get_homework(sub_to_grade['homework_id'])
+                        if not homework_for_sub:
+                            st.toast(f"找不到作业详情，跳过 {sub_to_grade['student_email']}", icon="⚠️")
+                            continue
+                        
+                        prompt_parts = ["""# 角色
+    你是一位经验丰富、耐心且善于引导的教学助手。请仔细分析学生的回答并提供有建设性的反馈。
+    # 任务
+    请根据【作业题目】和【学生回答】，完成以下几项工作：
+    1.  **逐题评分与反馈**: 对每一道题，给出具体的分数（满分由题目数量决定，总分100）和有针对性的反馈。
+    2.  **总结性评语**: 给出总分和一段鼓励性的整体评语。
+    # 输出格式
+    请严格以JSON格式输出，不要包含任何额外说明。
+    {
+      "overall_grade": 85,
+      "overall_feedback": "同学，你做得很好！大部分题目都掌握了，请继续保持。",
+      "detailed_grades": [
+        {"question_index": 0, "grade": 20, "feedback": "第一题回答得很棒！"},
+        {"question_index": 1, "grade": 15, "feedback": "第二题的概念有些混淆，建议复习一下课本第15页。"}
+      ]
+    }"""]
+                        for q_idx, q in enumerate(homework_for_sub['questions']):
+                            question_key = q.get('id', f'q_{q_idx}')
+                            answer = sub_to_grade['answers'].get(question_key, "学生未回答此题")
+                            if isinstance(answer, str) and (answer.endswith('.jpg') or answer.endswith('.png')):
+                                image_path = f"{BASE_ONEDRIVE_PATH}/submissions/{sub_to_grade['homework_id']}/{get_email_hash(sub_to_grade['student_email'])}/{answer}"
+                                image_bytes = get_onedrive_data(image_path, is_json=False)
+                                if image_bytes:
+                                    prompt_parts.append(f"\n--- 第{q_idx+1}题图片回答 ---")
+                                    prompt_parts.append(Image.open(io.BytesIO(image_bytes)))
+                                else:
+                                    prompt_parts.append(f"\n--- 第{q_idx+1}题图片回答 ---\n[无法加载图片]")
+                        
+                        final_prompt = [f"""【作业题目】: {json.dumps(homework_for_sub['questions'], ensure_ascii=False)}
+【学生回答】: {json.dumps(sub_to_grade['answers'], ensure_ascii=False)}
+(请注意，部分回答在后面的图片中)
+---
+请开始你的批改工作。"""] + prompt_parts
+                        
+                        ai_result_text = call_gemini_api(final_prompt)
+                        if ai_result_text:
+                            try:
+                                json_str = ai_result_text.strip().replace("```json", "").replace("```", "")
+                                ai_result = json.loads(json_str)
+                                sub_to_grade['status'] = 'ai_graded'
+                                sub_to_grade['ai_grade'] = ai_result.get('overall_grade')
+                                sub_to_grade['ai_feedback'] = ai_result.get('overall_feedback')
+                                sub_to_grade['ai_detailed_grades'] = ai_result.get('detailed_grades')
+                                path = f"{BASE_ONEDRIVE_PATH}/submissions/{sub_to_grade['homework_id']}/{get_email_hash(sub_to_grade['student_email'])}/submission.json"
+                                save_onedrive_data(path, sub_to_grade)
+                            except Exception:
+                                st.toast(f"批改 {sub_to_grade['student_email']} 时AI返回格式错误，已跳过。", icon="⚠️")
+                    
                     st.success("批量批改完成！"); st.cache_data.clear(); time.sleep(1); st.rerun()
 
                 all_students = course.get('student_emails', [])
@@ -354,27 +405,73 @@ def render_course_management_view(course, teacher_email):
                                 cols[1].success("已反馈")
                                 cols[2].metric("得分", sub.get('final_grade', 'N/A'))
                                 if cols[3].button("🤖 生成补习作业", key=f"remedial_{sub['submission_id']}"):
-                                    # ... (补习作业生成逻辑)
-                                    pass
+                                    with st.spinner(f"正在为 {sub['student_email']} 生成个性化补习作业..."):
+                                        original_homework = get_homework(sub['homework_id'])
+                                        if not original_homework:
+                                            st.error("找不到原始作业，无法生成补习作业。")
+                                        else:
+                                            prompt = f"""# 角色
+你是一位顶级的个性化教育导师。你的任务是根据学生过去的作业表现，为他们量身定制一份补习作业。
+# 背景信息
+学生 ({sub['student_email']}) 刚刚完成了名为《{original_homework['title']}》的作业。以下是原始作业的题目、学生的回答、以及系统给出的逐题反馈。
+## 原始作业题目
+{json.dumps(original_homework['questions'], ensure_ascii=False)}
+## 学生的回答与反馈
+{json.dumps(sub.get('ai_detailed_grades', []), ensure_ascii=False)}
+# 任务
+请仔细分析学生在哪些知识点上表现薄弱。然后，生成一份全新的、有针对性的补习作业，帮助学生巩固这些薄弱环节。
+# 要求
+1. **个性化**: 新题目必须与学生答错或表现不佳的题目相关。
+2. **难度适中**: 题目应该旨在巩固基础，而不是增加难度。
+3. **格式严格**: 输出必须是严格的JSON格式，与原始作业格式完全相同。不要包含任何额外的解释或文本。
+## JSON输出格式示例
+{{
+  "title": "针对《{original_homework['title']}》的个性化补习作业",
+  "questions": [
+    {{"id": "remedial_q0", "type": "text", "question": "这是一个新的、针对性的问题..."}},
+    {{"id": "remedial_q1", "type": "multiple_choice", "question": "这是另一个新的、针对性的选择题...", "options": ["选项A", "选项B", "选项C"]}}
+  ]
+}}
+---
+请现在开始生成补习作业的JSON内容。"""
+                                            remedial_hw_text = call_gemini_api(prompt)
+                                            if remedial_hw_text:
+                                                try:
+                                                    json_str = remedial_hw_text.strip().replace("```json", "").replace("```", "")
+                                                    remedial_hw_data = json.loads(json_str)
+                                                    new_hw_id = "remedial_" + str(uuid.uuid4())
+                                                    homework_to_save = {
+                                                        "homework_id": new_hw_id, "course_id": original_homework['course_id'],
+                                                        "student_email": sub['student_email'], "original_homework_id": original_homework['homework_id'],
+                                                        "title": remedial_hw_data.get('title', f"补习作业 for {original_homework['title']}"),
+                                                        "questions": remedial_hw_data.get('questions', [])
+                                                    }
+                                                    path = f"{BASE_ONEDRIVE_PATH}/remedial_homework/{new_hw_id}.json"
+                                                    if save_onedrive_data(path, homework_to_save):
+                                                        st.success(f"已为 {sub['student_email']} 生成补习作业！"); st.cache_data.clear(); time.sleep(2); st.rerun()
+                                                    else: st.error("保存补习作业失败。")
+                                                except Exception as e:
+                                                    st.error(f"AI返回的补习作业格式有误: {e}"); st.code(remedial_hw_text)
+                                            else: st.error("AI未能生成补习作业。")
                         else:
                             cols[1].error("未提交")
-                            
+
     with tab4:
         st.subheader("📊 班级学情分析")
         homework_list = get_course_homework(course['course_id'])
         if not homework_list:
             st.info("本课程还没有已发布的作业，无法进行分析。"); return
-        
+
         hw_options = {hw['title']: hw['homework_id'] for hw in homework_list}
         selected_hw_title = st.selectbox("请选择要分析的作业", options=hw_options.keys())
-        
+
         if st.button("开始分析", key=f"analyze_{hw_options[selected_hw_title]}"):
             with st.spinner("AI正在汇总分析全班的作业情况..."):
                 selected_hw_id = hw_options[selected_hw_title]
                 homework = get_homework(selected_hw_id)
                 submissions = get_submissions_for_homework(selected_hw_id)
                 graded_submissions = [s for s in submissions if s.get('status') == 'feedback_released']
-                
+
                 if len(graded_submissions) < 2:
                     st.warning("已批改的提交人数过少（少于2人），无法进行有意义的分析。")
                 else:
@@ -408,23 +505,25 @@ def render_student_dashboard(student_email):
                     if not target_course: st.error("邀请码无效，未找到对应课程。")
                     elif student_email in target_course.get('student_emails', []): st.info("您已经加入此课程。")
                     else:
-                        target_course['student_emails'].append(student_email)
+                        target_course.setdefault('student_emails', []).append(student_email)
                         path = f"{BASE_ONEDRIVE_PATH}/courses/{target_course['course_id']}.json"
                         if save_onedrive_data(path, target_course):
-                            st.success(f"成功加入课程 '{target_course['course_name']}'！"); st.cache_data.clear()
+                            st.success(f"成功加入课程 '{target_course['course_name']}'！"); st.cache_data.clear(); st.rerun()
                         else: st.error("加入课程失败，请稍后再试。")
     with tab1:
         st.subheader("我加入的课程")
         if not my_courses:
             st.info("您还没有加入任何课程。请到“加入新课程”标签页输入邀请码。"); return
-        
+
         for course in my_courses:
             with st.expander(f"**{course['course_name']}**", expanded=True):
-                homeworks = get_course_homework(course['course_id'])
-                if not homeworks:
+                all_course_homeworks = get_course_homework(course['course_id'])
+                student_homeworks = [hw for hw in all_course_homeworks if 'student_email' not in hw or hw.get('student_email') == student_email]
+
+                if not student_homeworks:
                     st.write("这门课还没有发布任何作业。")
                 else:
-                    for hw in homeworks:
+                    for hw in student_homeworks:
                         submission = get_student_submission(hw['homework_id'], student_email)
                         cols = st.columns([3,2,2])
                         cols[0].write(f"{hw['title']}")
@@ -445,13 +544,13 @@ def render_homework_submission_view(homework, student_email):
     st.header(f"作业: {homework['title']}")
     if st.button("返回课程列表"):
         st.session_state.viewing_homework_id = None; st.rerun()
-        
+
     with st.form("homework_submission_form"):
         answers = {}; uploaded_files = {}
         for i, q in enumerate(homework['questions']):
             st.write(f"--- \n**第{i+1}题:** {q['question']}")
             question_key = q.get('id', f'q_{i}')
-            
+
             if q.get('type') == 'text':
                 answers[question_key] = st.text_area("输入文字回答", key=question_key, height=150)
                 img_file_buffer = st.camera_input("拍照或上传手写答案", key=f"cam_{question_key}", help="如果上传图片，它将作为本题答案。")
@@ -462,7 +561,7 @@ def render_homework_submission_view(homework, student_email):
                     uploaded_files[file_name] = img_bytes
             elif q['type'] == 'multiple_choice':
                 answers[question_key] = st.radio("你的选择", q['options'], key=question_key, horizontal=True)
-        
+
         if st.form_submit_button("确认提交作业"):
             with st.spinner("正在提交您的作业..."):
                 submission_path_prefix = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(student_email)}"
@@ -477,12 +576,12 @@ def render_homework_submission_view(homework, student_email):
                     st.success("作业提交成功！"); st.cache_data.clear(); time.sleep(2)
                     st.session_state.viewing_homework_id = None; st.rerun()
                 else: st.error("提交失败，请稍后重试。")
-                
+
 def render_student_graded_view(submission, homework):
     st.header(f"作业结果: {homework['title']}")
     if st.button("返回课程列表"):
         st.session_state.viewing_homework_id = None; st.rerun()
-    
+
     st.metric("最终得分", f"{submission.get('final_grade', 'N/A')} / 100")
     st.info(f"**教师总评:** {submission.get('final_feedback', '老师没有留下评语。')}")
     st.write("---")
@@ -492,7 +591,7 @@ def render_student_graded_view(submission, homework):
         question_key = q.get('id', f'q_{i}')
         st.write(f"**第{i+1}题:** {q['question']}")
         answer = submission['answers'].get(question_key, "未回答")
-        
+
         if isinstance(answer, str) and (answer.endswith('.jpg') or answer.endswith('.png')):
             st.success("**你的回答 (图片):**")
             image_path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(submission['student_email'])}/{answer}"
@@ -501,7 +600,7 @@ def render_student_graded_view(submission, homework):
             else: st.warning("无法加载图片。")
         else:
             st.success(f"**你的回答:** {answer}")
-        
+
         detail = next((g for g in detailed_grades if g.get('question_index') == i), None)
         if detail:
             st.warning(f"**AI反馈:** {detail.get('feedback', '无')}")
@@ -513,32 +612,32 @@ def render_teacher_grading_view(submission, homework):
 
     st.subheader(f"学生: {submission['student_email']}")
     st.write(f"作业: {homework['title']}")
-    
+
     prompt_parts = ["""# 角色
 你是一位经验丰富、耐心且善于引导的教学助手... (完整的批改Prompt)
 """]
-    
+
     for i, q in enumerate(homework['questions']):
         with st.container(border=True):
             st.write(f"**第{i+1}题:** {q['question']}")
             question_key = q.get('id', f'q_{i}')
             answer = submission['answers'].get(question_key, "学生未回答此题")
-            
+
             if isinstance(answer, str) and (answer.endswith('.jpg') or answer.endswith('.png')):
                 st.info(f"**学生回答 (图片):**")
                 image_path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(submission['student_email'])}/{answer}"
                 with st.spinner("正在从OneDrive加载图片..."):
                     image_bytes = get_onedrive_data(image_path, is_json=False)
-                if image_bytes: 
+                if image_bytes:
                     st.image(image_bytes)
                     prompt_parts.append(f"\n--- 第{i+1}题图片回答 ---")
                     prompt_parts.append(Image.open(io.BytesIO(image_bytes)))
-                else: 
+                else:
                     st.warning("无法加载图片。")
                     prompt_parts.append(f"\n--- 第{i+1}题图片回答 ---\n[无法加载图片]")
             else:
                 st.info(f"**学生回答:** {answer}")
-    
+
     st.write("---")
     if submission.get('status') != 'feedback_released':
         if st.button("🤖 AI自动批改"):
@@ -549,7 +648,7 @@ def render_teacher_grading_view(submission, homework):
 ...(请注意，部分回答在后面的图片中)
 ---
 请开始你的批改工作。"""] + prompt_parts[1:]
-                
+
                 ai_result_text = call_gemini_api(final_prompt)
                 if ai_result_text:
                     try:
@@ -570,14 +669,20 @@ def render_teacher_grading_view(submission, homework):
     initial_grade, initial_feedback = (ai_result.get('overall_grade', 0), ai_result.get('overall_feedback', "")) if ai_result else (0, "")
 
     st.subheader("教师最终审核")
-    final_grade = st.number_input("最终得分", min_value=0, max_value=100, value=initial_grade)
+    
+    try:
+        initial_grade_value = int(float(initial_grade))
+    except (ValueError, TypeError):
+        initial_grade_value = 0
+
+    final_grade = st.number_input("最终得分", min_value=0, max_value=100, value=initial_grade_value)
     final_feedback = st.text_area("最终评语", value=initial_feedback, height=200)
 
     if st.button("✅ 确认并将结果反馈给学生", type="primary"):
         submission['status'] = "feedback_released"; submission['final_grade'] = final_grade; submission['final_feedback'] = final_feedback
         if ai_result:
             submission['ai_grade'] = ai_result.get('overall_grade'); submission['ai_feedback'] = ai_result.get('overall_feedback'); submission['ai_detailed_grades'] = ai_result.get('detailed_grades')
-        
+
         path = f"{BASE_ONEDRIVE_PATH}/submissions/{submission['homework_id']}/{get_email_hash(submission['student_email'])}/submission.json"
         if save_onedrive_data(path, submission):
             st.success("成绩和评语已成功反馈给学生！")
@@ -602,8 +707,16 @@ else:
     user_profile = get_user_profile(user_email)
     if not user_profile: st.error("无法加载您的用户配置，请尝试重新登录。")
     elif 'role' not in user_profile:
-        # ... Role selection logic ...
-        pass
+        st.subheader("请选择您的身份")
+        col1, col2 = st.columns(2)
+        if col1.button("我是老师", use_container_width=True):
+            user_profile['role'] = 'teacher'
+            if save_user_profile(user_email, user_profile): st.success("身份已设置为老师！"); time.sleep(1); st.rerun()
+            else: st.error("设置失败，请重试。")
+        if col2.button("我是学生", use_container_width=True):
+            user_profile['role'] = 'student'
+            if save_user_profile(user_email, user_profile): st.success("身份已设置为学生！"); time.sleep(1); st.rerun()
+            else: st.error("设置失败，请重试。")
     else:
         user_role = user_profile['role']
         if st.session_state.grading_submission:
@@ -616,9 +729,10 @@ else:
                 submission = get_student_submission(homework['homework_id'], user_email)
                 if submission and submission.get('status') == 'feedback_released':
                     render_student_graded_view(submission, homework)
-                else: render_homework_submission_view(homework, student_email)
+                else: render_homework_submission_view(homework, user_email)
             else: st.error("找不到作业。"); st.session_state.viewing_homework_id = None; st.rerun()
         elif user_role == 'teacher':
             render_teacher_dashboard(user_email)
         elif user_role == 'student':
-            render_student_dashboard(student_email)
+            render_student_dashboard(user_email)
+
