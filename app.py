@@ -386,24 +386,51 @@ def render_course_management_view(course, teacher_email):
 
         st.subheader("用AI生成并发布新作业")
         topic = st.text_input("作业主题", key=f"topic_{course['course_id']}")
-        details = st.text_area("具体要求", key=f"details_{course['course_id']}")
+        details = st.text_area("具体要求 (例如: 模拟网络故障排除、设计一个营销活动方案等)", key=f"details_{course['course_id']}")
         if st.button("AI 生成作业题目", key=f"gen_hw_{course['course_id']}", use_container_width=True):
             if 'editable_homework' in st.session_state: del st.session_state.editable_homework
             if 'generated_homework' in st.session_state: del st.session_state.generated_homework
 
             if topic and details:
                 with st.spinner("AI正在为您生成题目..."):
-                    prompt = f"""# 角色: 教学经验丰富的老师.
-# 任务: 为课程“{course['course_name']}”创建关于“{topic}”的作业。要求: {details}
-# 输出格式要求: 严格遵循以下JSON格式，不含任何解释性文字或Markdown标记.
+                    # --- START: 优化后的AI指令 ---
+                    prompt = f"""# 角色
+你是一位资深的专业课程实训导师，专注于设计需要学生动手操作和解决实际问题的题目。
+
+# 任务
+为课程“{course['course_name']}”创建一份关于“{topic}”的**实训作业**。作业要求如下：{details}
+
+# 核心指令
+1.  **强调实操**: 所有题目都必须是**实操性**或**场景模拟型**的，避免纯理论记忆的题目。
+2.  **场景化**: 每个问题都应提供一个清晰、具体的真实工作场景或业务背景。
+3.  **任务导向**: 明确要求学生完成一项具体的任务，如“编写代码”、“制定方案”、“排查故障”、“操作步骤”等。
+
+# 输出格式要求
+你必须严格遵循以下JSON格式，不包含任何解释性文字或Markdown标记。
+
+**JSON格式模板 (包含实训题示例):**
 {{
-"title": "{topic} - 单元作业",
+"title": "{topic} - 实训作业",
 "questions": [
-{{"id": "q0", "type": "text", "question": "这里是第一道独立的题目内容..."}},
-{{"id": "q1", "type": "multiple_choice", "question": "这里是第二道独立的题目内容...", "options": ["选项A", "选项B", "选项C"]}},
-{{"id": "q2", "type": "text", "question": "这里是第三道独立的题目内容..."}}
+    {{
+        "id": "q0", 
+        "type": "text", 
+        "question": "【场景】假设你是一家公司的网络管理员，有员工报告无法访问内部文件服务器。【任务】请详细列出你从接到报告到解决问题的完整故障排查步骤。"
+    }},
+    {{
+        "id": "q1", 
+        "type": "multiple_choice", 
+        "question": "【场景】在进行一个Python数据分析项目时，你发现数据集中存在大量缺失值。【问题】在进行模型训练前，最优先、最合理的处理步骤是什么？", 
+        "options": ["直接删除所有包含缺失值的行", "使用平均值或中位数填充所有缺失值", "分析缺失原因，并根据变量特性选择合适的填充方法", "忽略缺失值，直接进行模型训练"]
+    }},
+    {{
+        "id": "q2", 
+        "type": "text", 
+        "question": "【场景】你需要为一款新上市的咖啡产品设计一个为期一个月的社交媒体推广方案。【任务】请提供一份完整的方案，至少包含目标受众分析、核心创意、推广渠道选择和关键绩效指标(KPI)。"
+    }}
 ]
 }}"""
+                    # --- END: 优化后的AI指令 ---
                     response_text = call_gemini_api(prompt)
                     if response_text: 
                         st.session_state.generated_homework = response_text
@@ -857,4 +884,5 @@ else:
                 else: render_homework_submission_view(homework, user_email)
         elif user_role == 'teacher': render_teacher_dashboard(user_email)
         elif user_role == 'student': render_student_dashboard(user_email, user_profile)
+
 
