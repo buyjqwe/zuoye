@@ -104,7 +104,6 @@ def save_onedrive_data(path, data, is_json=True):
 def delete_onedrive_item(path):
     try:
         token = get_ms_graph_token(); headers = {"Authorization": f"Bearer {token}"}
-        # This API call works for both files and folders
         response = onedrive_api_request('delete', path, headers)
         if response.status_code in [204, 404]: # 204 is success, 404 means already deleted
             return True
@@ -259,25 +258,20 @@ def calculate_jaccard_similarity(text1, text2):
 
 def handle_delete_course(course_id_to_delete):
     with st.spinner("正在删除课程及其所有相关数据..."):
-        # 1. Get all homework for the course
         all_hw = get_all_homework()
         course_hws = [hw for hw in all_hw if hw.get('course_id') == course_id_to_delete]
 
-        # 2. Delete submission folders for each homework
         for hw in course_hws:
             submission_folder_path = f"{BASE_ONEDRIVE_PATH}/submissions/{hw['homework_id']}"
             delete_onedrive_item(submission_folder_path)
 
-        # 3. Filter out the homework from the main list
         remaining_hw = [hw for hw in all_hw if hw.get('course_id') != course_id_to_delete]
         save_all_homework(remaining_hw)
 
-        # 4. Filter out the course from the main course list
         all_courses = get_all_courses()
         remaining_courses = [c for c in all_courses if c.get('course_id') != course_id_to_delete]
         save_all_courses(remaining_courses)
 
-        # 5. Clear caches and show success
         st.cache_data.clear()
         st.success("课程及所有相关数据已成功删除。")
         time.sleep(2)
@@ -342,6 +336,32 @@ def render_course_management_view(course, teacher_email):
 
     tab1, tab2, tab3, tab4 = st.tabs(["作业管理", "学生管理", "成绩册", "📊 学情分析"])
 
+    # --- 定义完整的AI指令 ---
+    AI_GRADING_PROMPT = """# 角色
+你是一位全能、顶级的教学助手，能够理解多种文件格式。
+# 任务
+根据【作业题目】和【学生结构化回答】批改作业。学生的回答是一个JSON对象，键是题目ID，值是包含`text`和`attachments`（多种格式的附件）的对象。
+# 核心指令
+1.  **综合分析所有附件**: 学生的附件可能包含图片、视频、音频、代码、PDF、Word文档等。你必须综合分析所有提供的材料。例如，学生可能用PDF写主要答案，用图片附上手写草稿，用视频进行操作演示。
+2.  **逐题分析**: 针对每个题目ID，分析其对应的`text`和所有`attachments`。
+3.  **多模态理解**:
+    - **图片/视频**: 直接分析图像或视频内容，评价其正确性、完整性。
+    - **音频**: 听辨音频内容（如语言朗读、音乐演奏），并进行评价。
+    - **文档(PDF/DOCX)**: 阅读并理解文档的全部内容。
+    - **代码**: 分析代码的逻辑、正确性和风格。
+4.  **提供正确思路**: 如果学生回答错误，必须提供正确答案和/或详细的解题思路。
+5.  **给出分数和评语**: 基于以上综合分析，为每个问题提供反馈和建议分数，并给出最终的总分和总体评语。
+# 输出格式
+请严格以JSON格式输出。
+{
+  "overall_grade": 85,
+  "overall_feedback": "同学，你做得很好！...",
+  "detailed_grades": [
+    {"question_index": 0, "grade": 20, "feedback": "第一题的PDF解答思路清晰，结果正确。"},
+    {"question_index": 1, "grade": 0, "feedback": "第二题的代码存在逻辑错误，无法正确处理边界条件。"}
+  ]
+}"""
+
     with tab1:
         st.subheader("已发布的作业")
         course_homeworks = get_course_homework(course['course_id'])
@@ -358,7 +378,6 @@ def render_course_management_view(course, teacher_email):
                         all_hw = get_all_homework()
                         new_hw_list = [h for h in all_hw if h['homework_id'] != hw['homework_id']]
                         if save_all_homework(new_hw_list):
-                            # Also delete submission folder for this homework
                             delete_onedrive_item(f"{BASE_ONEDRIVE_PATH}/submissions/{hw['homework_id']}")
                             st.success("作业已删除！"); st.cache_data.clear(); time.sleep(1); st.rerun()
                         else:
@@ -473,7 +492,8 @@ def render_course_management_view(course, teacher_email):
                                 try:
                                     all_answers = sub.get('answers', {})
                                     text_data_part = f"【题目】: {json.dumps(hw['questions'], ensure_ascii=False)}\n【回答】: {json.dumps(all_answers, ensure_ascii=False)}"
-                                    api_prompt_parts = ["""# 角色: 全能教学助手... # 指令: 综合分析所有附件... # 输出格式: 严格JSON...""", text_data_part]
+                                    # --- FIX: 使用完整的AI指令 ---
+                                    api_prompt_parts = [AI_GRADING_PROMPT, text_data_part]
                                     
                                     for q_key, answer_data in all_answers.items():
                                         if answer_data.get('attachments'):
@@ -706,12 +726,39 @@ def render_teacher_grading_view(submission, homework):
     st.header("作业批改")
     if st.button("返回成绩册"): st.session_state.grading_submission = None; st.session_state.ai_grade_result = None; st.rerun()
 
+    # --- 定义完整的AI指令 ---
+    AI_GRADING_PROMPT = """# 角色
+你是一位全能、顶级的教学助手，能够理解多种文件格式。
+# 任务
+根据【作业题目】和【学生结构化回答】批改作业。学生的回答是一个JSON对象，键是题目ID，值是包含`text`和`attachments`（多种格式的附件）的对象。
+# 核心指令
+1.  **综合分析所有附件**: 学生的附件可能包含图片、视频、音频、代码、PDF、Word文档等。你必须综合分析所有提供的材料。例如，学生可能用PDF写主要答案，用图片附上手写草稿，用视频进行操作演示。
+2.  **逐题分析**: 针对每个题目ID，分析其对应的`text`和所有`attachments`。
+3.  **多模态理解**:
+    - **图片/视频**: 直接分析图像或视频内容，评价其正确性、完整性。
+    - **音频**: 听辨音频内容（如语言朗读、音乐演奏），并进行评价。
+    - **文档(PDF/DOCX)**: 阅读并理解文档的全部内容。
+    - **代码**: 分析代码的逻辑、正确性和风格。
+4.  **提供正确思路**: 如果学生回答错误，必须提供正确答案和/或详细的解题思路。
+5.  **给出分数和评语**: 基于以上综合分析，为每个问题提供反馈和建议分数，并给出最终的总分和总体评语。
+# 输出格式
+请严格以JSON格式输出。
+{
+  "overall_grade": 85,
+  "overall_feedback": "同学，你做得很好！...",
+  "detailed_grades": [
+    {"question_index": 0, "grade": 20, "feedback": "第一题的PDF解答思路清晰，结果正确。"},
+    {"question_index": 1, "grade": 0, "feedback": "第二题的代码存在逻辑错误，无法正确处理边界条件。"}
+  ]
+}"""
+
     st.subheader(f"学生: {submission['student_email']}")
     if st.button("🤖 AI自动批改", key=f"ai_grade_{submission['submission_id']}", use_container_width=True):
         with st.spinner("AI分析中..."):
             all_answers = submission.get('answers', {})
             text_part = f"【题目】:{json.dumps(homework['questions'], ensure_ascii=False)}\n【回答】:{json.dumps(all_answers, ensure_ascii=False)}"
-            prompt_parts = ["""# 角色: 全能教学助手... # 指令: 综合分析所有附件... # 输出格式: 严格JSON...""", text_part]
+            # --- FIX: 使用完整的AI指令 ---
+            prompt_parts = [AI_GRADING_PROMPT, text_part]
             for q_key, answer_data in all_answers.items():
                 for filename in answer_data.get('attachments', []):
                     file_path = f"{BASE_ONEDRIVE_PATH}/submissions/{homework['homework_id']}/{get_email_hash(submission['student_email'])}/{filename}"
@@ -723,13 +770,25 @@ def render_teacher_grading_view(submission, homework):
                         elif mime_type: prompt_parts.append(genai.Part(inline_data=file_bytes, mime_type=mime_type))
             ai_result_text = call_gemini_api(prompt_parts)
             if ai_result_text:
-                try: st.session_state.ai_grade_result = json.loads(re.sub(r'```json\s*|\s*```', '', ai_result_text.strip())); st.rerun()
-                except Exception as e: st.error(f"AI返回格式错误: {e}"); st.code(ai_result_text)
-            else: st.error("AI调用失败。")
+                try: 
+                    st.session_state.ai_grade_result = json.loads(re.sub(r'```json\s*|\s*```', '', ai_result_text.strip()))
+                    st.rerun()
+                except Exception as e: 
+                    st.error(f"AI返回格式错误: {e}")
+                    st.code(ai_result_text)
+            else: 
+                st.error("AI调用失败。")
     
     st.divider(); st.subheader("学生提交及AI建议")
     all_answers = submission.get('answers', {})
-    ai_result = st.session_state.get('ai_grade_result') or ({"overall_grade": s.get('ai_grade'), "overall_feedback": s.get('ai_feedback'), "detailed_grades": s.get('ai_detailed_grades')} if submission.get('ai_detailed_grades') else {})
+    ai_result = st.session_state.get('ai_grade_result')
+    if not ai_result and submission.get('ai_detailed_grades'):
+        ai_result = {
+            "overall_grade": submission.get('ai_grade'), 
+            "overall_feedback": submission.get('ai_feedback'), 
+            "detailed_grades": submission.get('ai_detailed_grades')
+        }
+    
     grades_map = {g['question_index']: g for g in ai_result.get('detailed_grades', [])} if ai_result else {}
     for i, q in enumerate(homework['questions']):
         answer_data = all_answers.get(q.get('id', f'q_{i}'))
@@ -744,8 +803,13 @@ def render_teacher_grading_view(submission, homework):
             if ai_feedback: st.warning(f"**AI反馈:** {ai_feedback.get('feedback', '无')}\n**建议得分:** {ai_feedback.get('grade', 'N/A')}")
     
     st.divider(); st.subheader("教师最终审核")
-    initial_grade = submission.get('final_grade', ai_result.get('overall_grade', 0))
-    initial_feedback = submission.get('final_feedback', ai_result.get('overall_feedback', ""))
+    initial_grade = submission.get('final_grade', 0)
+    if ai_result:
+        initial_grade = ai_result.get('overall_grade', submission.get('final_grade', 0))
+    initial_feedback = submission.get('final_feedback', "")
+    if ai_result:
+        initial_feedback = ai_result.get('overall_feedback', submission.get('final_feedback', ""))
+        
     final_grade = st.number_input("最终得分", 0, 100, int(float(initial_grade or 0)), key=f"final_grade_{submission['submission_id']}")
     final_feedback = st.text_area("最终评语", initial_feedback, height=200, key=f"final_feedback_{submission['submission_id']}")
     button_text = "✅ 更新并反馈" if submission.get('status') == 'feedback_released' else "✅ 确认并反馈"
@@ -757,7 +821,7 @@ def render_teacher_grading_view(submission, homework):
         else: st.error("反馈失败。")
 
 # --- 主程序 ---
-st.title("📚 在线作业平台")
+st.title("📚 在线作业平台 (Gemini 2.5 Flash 驱动)")
 check_session_from_query_params()
 if not st.session_state.get('logged_in'):
     display_login_form()
