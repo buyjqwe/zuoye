@@ -757,7 +757,7 @@ def render_teacher_grading_view(submission, homework):
         else: st.error("反馈失败。")
 
 # --- 主程序 ---
-st.title("📚 在线作业平台 (Gemini 2.5 Flash 驱动)")
+st.title("📚 在线作业平台")
 check_session_from_query_params()
 if not st.session_state.get('logged_in'):
     display_login_form()
