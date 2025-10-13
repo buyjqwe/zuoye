@@ -24,13 +24,11 @@ HOMEWORK_FILE_PATH = f"{BASE_ONEDRIVE_PATH}/all_homework.json"
 
 # --- 支持的文件类型 ---
 SUPPORTED_FILE_TYPES = {
-    "image": ['png', 'jpg', 'jpeg', 'webp', 'heic', 'heif'],
+    "image": ['png', 'jpg', 'jpeg', 'webp'],
     "audio": ['mp3', 'wav', 'aac', 'flac', 'ogg'],
     "video": ['mp4', 'mov', 'avi', 'mpeg', 'webm'],
-    "document": ['pdf', 'docx'],
-    "code": ['py', 'js', 'html', 'css', 'java', 'cpp', 'c', 'cs', 'go', 'rb', 'php', 'sql', 'json', 'xml', 'md', 'ts'],
-    "presentation": ['pptx'],
-    "spreadsheet": ['xlsx']
+    "document": ['pdf'],
+    "code": ['py', 'html', 'css', 'md', 'cs'],
 }
 ALL_SUPPORTED_EXTENSIONS = [ext for category in SUPPORTED_FILE_TYPES.values() for ext in category]
 
@@ -119,20 +117,41 @@ def save_global_data(file_name, data): return save_onedrive_data(f"{BASE_ONEDRIV
 
 def get_mime_type(filename):
     ext = filename.split('.')[-1].lower()
+    
     mime_map = {
-        'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'webp': 'image/webp',
-        'heic': 'image/heic', 'heif': 'image/heif',
-        'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'aac': 'audio/aac', 'flac': 'audio/flac', 'ogg': 'audio/ogg',
-        'mp4': 'video/mp4', 'mov': 'video/quicktime', 'avi': 'video/x-msvideo', 'mpeg': 'video/mpeg', 'webm': 'video/webm',
+        # --- 图像 (测试成功) ---
+        'png': 'image/png', 
+        'jpg': 'image/jpeg', 
+        'jpeg': 'image/jpeg', 
+        'webp': 'image/webp',
+        
+        # --- 音频 (测试成功) ---
+        'mp3': 'audio/mpeg', 
+        'wav': 'audio/wav', 
+        'aac': 'audio/aac', 
+        'flac': 'audio/flac', 
+        'ogg': 'audio/ogg',
+        
+        # --- 视频 (保留标准 MIME，需 Files API/有效内容测试) ---
+        'mp4': 'video/mp4', 
+        'mov': 'video/quicktime', 
+        'avi': 'video/x-msvideo', 
+        'mpeg': 'video/mpeg', 
+        'webm': 'video/webm',
+        
+        # --- 文档 (保留 PDF，需有效内容测试) ---
         'pdf': 'application/pdf',
-        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'py': 'text/x-python', 'js': 'application/javascript', 'html': 'text/html', 'css': 'text/css',
-        'java': 'text/x-java-source', 'cpp': 'text/x-c', 'c': 'text/x-c', 'cs': 'text/plain',
-        'go': 'text/x-go', 'rb': 'text/x-ruby', 'php': 'application/x-httpd-php', 'sql': 'application/sql',
-        'json': 'application/json', 'xml': 'application/xml', 'md': 'text/markdown', 'ts': 'text/typescript'
+        
+        # --- 代码/文本 (使用测试成功的或标准 MIME) ---
+        'py': 'text/x-python',       # 测试成功
+        'html': 'text/html',         # 测试成功
+        'css': 'text/css',           # 测试成功
+        'md': 'text/markdown',       # 测试成功
+        'cs': 'text/plain',          # 测试成功 (MIME类型即为 text/plain)
+        
+
     }
+    
     return mime_map.get(ext)
 
 def handle_send_code(email):
