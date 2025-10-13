@@ -533,7 +533,7 @@ def render_course_management_view(course, teacher_email):
                                                     if mime_type and mime_type.startswith('image/'):
                                                         api_prompt_parts.append(Image.open(io.BytesIO(file_bytes)))
                                                     elif mime_type:
-                                                        api_prompt_parts.append(genai.Part(inline_data=file_bytes, mime_type=mime_type))
+                                                        api_prompt_parts.append({'inline_data': {'data': file_bytes, 'mime_type': mime_type}})
 
                                     ai_result_text = call_gemini_api(api_prompt_parts)
                                     if ai_result_text:
@@ -794,7 +794,7 @@ def render_teacher_grading_view(submission, homework):
                         prompt_parts.append(f"--- 附件 '{filename}' ---")
                         mime_type = get_mime_type(filename)
                         if mime_type and mime_type.startswith('image/'): prompt_parts.append(Image.open(io.BytesIO(file_bytes)))
-                        elif mime_type: prompt_parts.append(genai.Part(inline_data=file_bytes, mime_type=mime_type))
+                        elif mime_type: prompt_parts.append({'inline_data': {'data': file_bytes, 'mime_type': mime_type}})
             ai_result_text = call_gemini_api(prompt_parts)
             if ai_result_text:
                 try: 
@@ -884,5 +884,6 @@ else:
                 else: render_homework_submission_view(homework, user_email)
         elif user_role == 'teacher': render_teacher_dashboard(user_email)
         elif user_role == 'student': render_student_dashboard(user_email, user_profile)
+
 
 
